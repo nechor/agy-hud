@@ -1,0 +1,13 @@
+{
+  "ui": {
+    "compactToolOutput": true
+  },
+  "context": {
+    "fileFiltering": {
+      "respectGitIgnore": false
+    }
+  },
+  "experimental": {
+    "enableAgents": true
+  }
+}

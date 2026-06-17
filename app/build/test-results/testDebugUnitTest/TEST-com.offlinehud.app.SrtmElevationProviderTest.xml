@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.offlinehud.app.SrtmElevationProviderTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-06-17T20:18:04.291Z" hostname="chips-ubuntu" time="0.03">
+  <properties/>
+  <testcase name="testGetElevationWithMissingFile" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.005"/>
+  <testcase name="testGetElevationWithVoidData" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.011"/>
+  <testcase name="testGetElevationCache" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.008"/>
+  <testcase name="testGetElevationWithValidFile" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -748,8 +748,26 @@ fun SpeedometerGauge(
             val fillPercentage = (animatedSpeed / maxSpeedScale).coerceIn(0f, 1f)
             val activeSweep = fillPercentage * 240f
             
+             // Active neon gauge ellipse arc
+             drawArc(
+                 brush = Brush.sweepGradient(
+                     colors = listOf(
+                         speedColor.copy(alpha = 0.3f),
+                         speedColor,
+                         speedColor
+                     ),
+                     center = center
+                 ),
+                 startAngle = 150f,
+                 sweepAngle = activeSweep,
+                 useCenter = false,
+                 topLeft = topLeft,
+                 size = arcSize,
+                 style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
+             )
+ 
              // Speedometer ticks aligned to the ellipse (0 to 170 km/h with 10 km/h intervals -> 18 ticks)
-             // Drawn BEFORE the active arc so they appear "underneath" it
+             // Drawn AFTER the active arc so they appear on top and can apply the inversion effect
              val tickCount = 18
              for (i in 0 until tickCount) {
                  val angleDeg = 150f + (i * (240f / (tickCount - 1)))
@@ -757,9 +775,18 @@ fun SpeedometerGauge(
                  val speedVal = i * 10
                  val isProminent = (speedVal == 0 || speedVal == 50 || speedVal == 100 || speedVal == 150)
                  
+                 // If the tick angle is within the swept angle of the active speed, it is covered
+                 val isCovered = angleDeg <= 150f + activeSweep
+                 
                  val tickLength = 6.dp.toPx()
                  val tickWidth = if (isProminent) 3.5.dp.toPx() else 1.8.dp.toPx()
-                 val tickColor = if (isProminent) speedColor else speedColor.copy(alpha = 0.6f)
+                 
+                 // Covered ticks use a dark semi-transparent color for inversion/stencil look
+                 val tickColor = if (isCovered) {
+                     Color.Black.copy(alpha = 0.5f)
+                 } else {
+                     if (isProminent) speedColor else speedColor.copy(alpha = 0.6f)
+                 }
                  
                  val halfLen = tickLength / 2
                  val aStart = a - halfLen
@@ -779,24 +806,6 @@ fun SpeedometerGauge(
                      strokeWidth = tickWidth
                  )
              }
- 
-             // Active neon gauge ellipse arc
-             drawArc(
-                 brush = Brush.sweepGradient(
-                     colors = listOf(
-                         speedColor.copy(alpha = 0.3f),
-                         speedColor.copy(alpha = 0.75f),
-                         speedColor.copy(alpha = 0.75f)
-                     ),
-                     center = center
-                 ),
-                 startAngle = 150f,
-                 sweepAngle = activeSweep,
-                 useCenter = false,
-                 topLeft = topLeft,
-                 size = arcSize,
-                 style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
-             )
         }
         
         Column(

@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -363,6 +365,13 @@ fun HudScreen(
     onToggleSimulator: () -> Unit,
     onDownloadData: () -> Unit
 ) {
+    val context = LocalContext.current
+    val DigitalFontFamily = remember {
+        FontFamily(
+            Font(path = "dseg7classic.ttf", assetManager = context.assets)
+        )
+    }
+
     val overspeed = speedLimit != null && speed > (speedLimit + 10)
     
     val speedColor by animateColorAsState(
@@ -517,9 +526,9 @@ fun HudScreen(
                         Text(
                             text = if (elevation != null) "${elevation}m" else "---",
                             color = Color(0xFF00FF88),
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = FontFamily.Monospace
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Normal,
+                            fontFamily = DigitalFontFamily
                         )
                     }
  
@@ -629,6 +638,13 @@ fun SpeedometerGauge(
     speedColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val DigitalFontFamily = remember {
+        FontFamily(
+            Font(path = "dseg7classic.ttf", assetManager = context.assets)
+        )
+    }
+
     val animatedSpeed by animateFloatAsState(
         targetValue = speed.toFloat(),
         animationSpec = spring(stiffness = Spring.StiffnessLow),
@@ -721,9 +737,9 @@ fun SpeedometerGauge(
             Text(
                 text = speed.roundToInt().toString(),
                 color = speedColor,
-                fontSize = 72.sp,
-                fontWeight = FontWeight.Light,
-                fontFamily = FontFamily.Monospace,
+                fontSize = 76.sp,
+                fontWeight = FontWeight.Normal,
+                fontFamily = DigitalFontFamily,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(2.dp))
@@ -745,6 +761,13 @@ fun HolographicSpeedLimit(
     limit: Int?,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val DigitalFontFamily = remember {
+        FontFamily(
+            Font(path = "dseg7classic.ttf", assetManager = context.assets)
+        )
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "hologramRotation")
     val rotationAngle by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -830,9 +853,9 @@ fun HolographicSpeedLimit(
             Text(
                 text = limit.toString(),
                 color = Color.White,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Normal,
+                fontFamily = DigitalFontFamily,
                 textAlign = TextAlign.Center
             )
         } else {

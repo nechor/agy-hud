@@ -771,10 +771,9 @@ fun SpeedometerGauge(
             for (i in 0 until tickCount) {
                 val angleDeg = 150f + (i * (240f / (tickCount - 1)))
                 val angleRad = Math.toRadians(angleDeg.toDouble())
-                val isMajor = i % 2 == 0
-                val tickLength = if (isMajor) 10.dp.toPx() else 5.dp.toPx()
-                val tickWidth = if (isMajor) 2.dp.toPx() else 1.dp.toPx()
-                val tickColor = if (isMajor) speedColor.copy(alpha = 0.8f) else Color(0xFF475569)
+                val tickLength = 10.dp.toPx()
+                val tickWidth = 2.dp.toPx()
+                val tickColor = speedColor.copy(alpha = 0.8f)
                 
                 val halfLen = tickLength / 2
                 val aStart = a - halfLen

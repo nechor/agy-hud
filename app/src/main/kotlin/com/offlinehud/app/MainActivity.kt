@@ -757,7 +757,7 @@ fun SpeedometerGauge(
                  val speedVal = i * 10
                  val isProminent = (speedVal == 0 || speedVal == 50 || speedVal == 100 || speedVal == 150)
                  
-                 val tickLength = 14.dp.toPx()
+                 val tickLength = 6.dp.toPx()
                  val tickWidth = if (isProminent) 3.5.dp.toPx() else 1.8.dp.toPx()
                  val tickColor = if (isProminent) speedColor else speedColor.copy(alpha = 0.6f)
                  

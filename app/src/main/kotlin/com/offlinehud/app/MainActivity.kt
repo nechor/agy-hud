@@ -1262,7 +1262,9 @@ fun SteppedNeonChart(
                 drawPath(
                     path = slicePath,
                     brush = Brush.verticalGradient(
-                        colors = listOf(segmentColor.copy(alpha = 0.15f), Color.Transparent)
+                        colors = listOf(segmentColor.copy(alpha = 0.15f), Color.Transparent),
+                        startY = minOf(prevY, y),
+                        endY = height
                     )
                 )
 

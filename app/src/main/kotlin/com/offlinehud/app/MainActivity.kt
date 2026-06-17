@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -57,6 +58,7 @@ class MainActivity : ComponentActivity(), LocationListener {
     private val speed = mutableStateOf(0.0) // km/h
     private val elevation = mutableStateOf<Short?>(null) // meters
     private val speedLimit = mutableStateOf<Int?>(null) // km/h
+    private val bearing = mutableStateOf(0.0f) // degrees
     private val isSymmetricMirror = mutableStateOf(false)
     private val gpsStatus = mutableStateOf("No GPS Fix")
     private val mapStatus = mutableStateOf("Offline Map: Not Loaded")
@@ -64,7 +66,9 @@ class MainActivity : ComponentActivity(), LocationListener {
 
     // History logs for step charts
     val speedHistory = mutableStateListOf<Float>()
+    val speedColorHistory = mutableStateListOf<Color>()
     val elevationHistory = mutableStateListOf<Float>()
+    private val locationHistory = mutableListOf<Pair<Double, Double>>()
 
     // Hysteresis helper
     private var lastValidSpeedLimit: Int? = null
@@ -122,11 +126,13 @@ class MainActivity : ComponentActivity(), LocationListener {
                     speed = speed.value,
                     elevation = elevation.value,
                     speedLimit = speedLimit.value,
+                    bearing = bearing.value,
                     isMirror = isSymmetricMirror.value,
                     gpsStatus = gpsStatus.value,
                     mapStatus = mapStatus.value,
                     isSimulatorActive = isSimulatorActive.value,
                     speedHistory = speedHistory,
+                    speedColorHistory = speedColorHistory,
                     elevationHistory = elevationHistory,
                     downloadProgress = downloadProgress.value,
                     onToggleMirror = { isSymmetricMirror.value = !isSymmetricMirror.value },
@@ -212,6 +218,22 @@ class MainActivity : ComponentActivity(), LocationListener {
         elevationHistory.add(elevVal.toFloat())
         if (elevationHistory.size > 25) elevationHistory.removeAt(0)
 
+        // Calculate bearing based on traveled points history (minimum 3 km/h to filter GPS noise)
+        if (currentSpeedKmh > 3.0 || isSimulatorActive.value) {
+            locationHistory.add(Pair(lat, lon))
+            if (locationHistory.size > 8) {
+                locationHistory.removeAt(0)
+            }
+            // Use coordinate from 3 steps ago (or oldest in history) to get a stable direction vector
+            if (locationHistory.size >= 4) {
+                val oldPoint = locationHistory[locationHistory.size - 4]
+                bearing.value = calculateBearing(oldPoint.first, oldPoint.second, lat, lon).toFloat()
+            } else if (locationHistory.size >= 2) {
+                val oldPoint = locationHistory[0]
+                bearing.value = calculateBearing(oldPoint.first, oldPoint.second, lat, lon).toFloat()
+            }
+        }
+
         // Cache/optimize Map Matching queries if the driver hasn't moved much (less than 5 meters)
         val distanceMoved = calculateDistanceMeters(lat, lon, lastQueryLat, lastQueryLon)
         val limit = if (distanceMoved >= 5.0 || speedLimit.value == null) {
@@ -235,6 +257,34 @@ class MainActivity : ComponentActivity(), LocationListener {
                 speedLimit.value = null
             }
         }
+
+        // Calculate and log speed color history for the timeline chart
+        val limitVal = speedLimit.value
+        val pointColor = if (limitVal != null) {
+            val ratio = currentSpeedKmh / limitVal
+            when {
+                ratio <= 0.8 -> Color(0xFF00F0FF)    // Blue
+                ratio <= 1.0 -> Color(0xFF00FF88)    // Green
+                ratio <= 1.1 -> Color(0xFFFFB74D)    // Yellow
+                else -> Color(0xFFFF0055)            // Red
+            }
+        } else {
+            Color(0xFF00F0FF)
+        }
+        speedColorHistory.add(pointColor)
+        if (speedColorHistory.size > 25) speedColorHistory.removeAt(0)
+    }
+
+    private fun calculateBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val lat1Rad = Math.toRadians(lat1)
+        val lat2Rad = Math.toRadians(lat2)
+        val lonDiffRad = Math.toRadians(lon2 - lon1)
+
+        val y = Math.sin(lonDiffRad) * Math.cos(lat2Rad)
+        val x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(lonDiffRad)
+
+        val bearingRad = Math.atan2(y, x)
+        return (Math.toDegrees(bearingRad) + 360.0) % 360.0
     }
 
     private val simulatorHandler = Handler(Looper.getMainLooper())
@@ -354,11 +404,13 @@ fun HudScreen(
     speed: Double,
     elevation: Short?,
     speedLimit: Int?,
+    bearing: Float,
     isMirror: Boolean,
     gpsStatus: String,
     mapStatus: String,
     isSimulatorActive: Boolean,
     speedHistory: List<Float>,
+    speedColorHistory: List<Color>,
     elevationHistory: List<Float>,
     downloadProgress: Float?,
     onToggleMirror: () -> Unit,
@@ -372,10 +424,22 @@ fun HudScreen(
         )
     }
 
-    val overspeed = speedLimit != null && speed > (speedLimit + 10)
+    val overspeed = speedLimit != null && speed > (speedLimit * 1.1)
+    
+    val targetSpeedColor = if (speedLimit != null) {
+        val ratio = speed / speedLimit
+        when {
+            ratio <= 0.8 -> Color(0xFF00F0FF)    // Blue (0 - 80%)
+            ratio <= 1.0 -> Color(0xFF00FF88)    // Green (80% - 100%)
+            ratio <= 1.1 -> Color(0xFFFFB74D)    // Yellow (100% - 110%)
+            else -> Color(0xFFFF0055)            // Red (> 110%)
+        }
+    } else {
+        Color(0xFF00F0FF) // Default Blue when no limit is logged
+    }
     
     val speedColor by animateColorAsState(
-        targetValue = if (overspeed) Color(0xFFFF0055) else Color(0xFF00F0FF),
+        targetValue = targetSpeedColor,
         animationSpec = tween(durationMillis = 300),
         label = "speedColor"
     )
@@ -473,6 +537,12 @@ fun HudScreen(
                             )
                         }
                     }
+
+                    // Small compass on Top-Right
+                    CompassWidget(
+                        bearing = bearing,
+                        modifier = Modifier.size(54.dp)
+                    )
                 }
  
                 // Speedometer Gauge Centered below indicators
@@ -500,10 +570,7 @@ fun HudScreen(
                     .background(Color(0x1A0F172A))
                     .border(
                         width = 1.dp,
-                        brush = Brush.linearGradient(
-                            colors = if (overspeed) listOf(Color(0xFFFF0055), Color(0x33FF0055))
-                                    else listOf(Color(0xFF334155).copy(alpha = 0.5f), Color(0xFF334155).copy(alpha = 0.2f))
-                        ),
+                        color = Color(0xFF334155).copy(alpha = 0.5f),
                         shape = RoundedCornerShape(12.dp)
                     )
                     .padding(horizontal = 16.dp, vertical = 6.dp)
@@ -583,12 +650,12 @@ fun HudScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     SteppedNeonChart(
                         data = speedHistory,
-                        color = speedColor,
+                        colors = speedColorHistory,
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 }
             }
-
+ 
             // 4. SEPARATED ALTITUDE CHART (Full Width)
             Box(
                 modifier = Modifier
@@ -611,7 +678,7 @@ fun HudScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     SteppedNeonChart(
                         data = elevationHistory,
-                        color = Color(0xFF00FF88),
+                        colors = remember(elevationHistory.size) { elevationHistory.map { Color(0xFF00FF88) } },
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 }
@@ -676,8 +743,8 @@ fun SpeedometerGauge(
                 style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
             )
             
-            // Speed scale up to 180 km/h
-            val maxSpeedScale = 180f
+            // Speed scale up to 170 km/h
+            val maxSpeedScale = 170f
             val fillPercentage = (animatedSpeed / maxSpeedScale).coerceIn(0f, 1f)
             val activeSweep = fillPercentage * 240f
             
@@ -699,8 +766,8 @@ fun SpeedometerGauge(
                 style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
             )
 
-            // Speedometer ticks aligned to the ellipse
-            val tickCount = 19
+            // Speedometer ticks aligned to the ellipse (0 to 170 km/h with 10 km/h intervals -> 18 ticks)
+            val tickCount = 18
             for (i in 0 until tickCount) {
                 val angleDeg = 150f + (i * (240f / (tickCount - 1)))
                 val angleRad = Math.toRadians(angleDeg.toDouble())
@@ -1125,7 +1192,7 @@ fun SciFiBottomConsole(
 @Composable
 fun SteppedNeonChart(
     data: List<Float>,
-    color: Color,
+    colors: List<Color>,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
@@ -1161,40 +1228,167 @@ fun SteppedNeonChart(
         val range = maxVal - minVal
 
         val stepX = if (data.size > 1) width / (data.size - 1) else width
-        val path = Path()
 
         for (i in data.indices) {
-            val x = i * stepX
-            val y = height - ((data[i] - minVal) / range) * height
-            if (i == 0) {
-                path.moveTo(x, y)
-            } else {
+            if (i > 0) {
+                val prevX = (i - 1) * stepX
                 val prevY = height - ((data[i - 1] - minVal) / range) * height
-                path.lineTo(x, prevY) // step horizontal
-                path.lineTo(x, y)     // step vertical
+                val x = i * stepX
+                val y = height - ((data[i] - minVal) / range) * height
+
+                val segmentColor = if (i < colors.size) colors[i] else (colors.lastOrNull() ?: Color(0xFF00F0FF))
+
+                // Draw neon glow filled area under this specific step segment
+                val slicePath = Path().apply {
+                    moveTo(prevX, prevY)
+                    lineTo(x, prevY)
+                    lineTo(x, y)
+                    lineTo(x, height)
+                    lineTo(prevX, height)
+                    close()
+                }
+                drawPath(
+                    path = slicePath,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(segmentColor.copy(alpha = 0.15f), Color.Transparent)
+                    )
+                )
+
+                // Draw horizontal line segment
+                drawLine(
+                    color = segmentColor,
+                    start = Offset(prevX, prevY),
+                    end = Offset(x, prevY),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+
+                // Draw vertical line segment
+                drawLine(
+                    color = segmentColor,
+                    start = Offset(x, prevY),
+                    end = Offset(x, y),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CompassWidget(
+    bearing: Float,
+    modifier: Modifier = Modifier
+) {
+    val animatedBearing by animateFloatAsState(
+        targetValue = bearing,
+        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        label = "animatedBearing"
+    )
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color(0x1A0F172A))
+            .border(1.5.dp, Color(0xFF334155).copy(alpha = 0.6f), CircleShape)
+    ) {
+        // Rotating compass card (NESW)
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    rotationZ = -animatedBearing
+                }
+        ) {
+            val center = Offset(size.width / 2, size.height / 2)
+            val radius = size.width.coerceAtMost(size.height) / 2
+            val dialRadius = radius - 3.dp.toPx()
+
+            // Draw outer dial ring
+            drawCircle(
+                color = Color(0xFF00F0FF).copy(alpha = 0.25f),
+                radius = dialRadius,
+                style = Stroke(width = 1.dp.toPx())
+            )
+
+            // Draw ticks every 30 degrees
+            for (angle in 0 until 360 step 30) {
+                val angleRad = Math.toRadians(angle.toDouble())
+                val isPrincipal = angle % 90 == 0
+                val tickLength = if (isPrincipal) 5.dp.toPx() else 3.dp.toPx()
+                val tickColor = if (isPrincipal) Color(0xFF00F0FF) else Color(0xFF475569)
+                val tickWidth = if (isPrincipal) 2.dp.toPx() else 1.dp.toPx()
+
+                val startX = center.x + (dialRadius - tickLength) * Math.cos(angleRad).toFloat()
+                val startY = center.y + (dialRadius - tickLength) * Math.sin(angleRad).toFloat()
+                val endX = center.x + dialRadius * Math.cos(angleRad).toFloat()
+                val endY = center.y + dialRadius * Math.sin(angleRad).toFloat()
+
+                drawLine(
+                    color = tickColor,
+                    start = Offset(startX, startY),
+                    end = Offset(endX, endY),
+                    strokeWidth = tickWidth
+                )
+            }
+
+            // Draw N, E, S, W text labels
+            drawContext.canvas.nativeCanvas.apply {
+                val paint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.parseColor("#00F0FF")
+                    textSize = 8.sp.toPx()
+                    typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+                    textAlign = android.graphics.Paint.Align.CENTER
+                }
+
+                // Standard coordinate angles (North is 270 deg, East is 0 deg, South is 90 deg, West is 180 deg)
+                val labels = listOf("N" to 270f, "E" to 0f, "S" to 90f, "W" to 180f)
+                for ((label, angle) in labels) {
+                    val angleRad = Math.toRadians(angle.toDouble())
+                    val textDist = dialRadius - 9.dp.toPx()
+                    val x = center.x + textDist * Math.cos(angleRad).toFloat()
+                    val y = center.y + textDist * Math.sin(angleRad).toFloat()
+
+                    val fontMetrics = paint.fontMetrics
+                    val yAdjusted = y - (fontMetrics.ascent + fontMetrics.descent) / 2
+
+                    paint.color = if (label == "N") android.graphics.Color.parseColor("#FF0055") else android.graphics.Color.parseColor("#00F0FF")
+                    drawText(label, x, yAdjusted, paint)
+                }
             }
         }
 
-        // Draw neon glow filled area under the line
-        val fillPath = Path().apply {
-            addPath(path)
-            lineTo(width, height)
-            lineTo(0f, height)
-            close()
-        }
-        drawPath(
-            path = fillPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(color.copy(alpha = 0.2f), Color.Transparent)
-            )
-        )
+        // Stationary header index/pointer (shows current heading pointing straight UP)
+        Canvas(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            val center = Offset(size.width / 2, size.height / 2)
+            val arrowLength = 9.dp.toPx()
+            val arrowWidth = 6.dp.toPx()
 
-        // Draw glowing smooth neon curve
-        drawPath(
-            path = path,
-            color = color,
-            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
-        )
+            // Futuristic pointer arrow pointing UP
+            val arrowPath = Path().apply {
+                moveTo(center.x, center.y - arrowLength) // Tip
+                lineTo(center.x - arrowWidth / 2, center.y - arrowLength / 3)
+                lineTo(center.x, center.y - arrowLength / 2)
+                lineTo(center.x + arrowWidth / 2, center.y - arrowLength / 3)
+                close()
+            }
+
+            drawPath(
+                path = arrowPath,
+                color = Color(0xFF00FF88) // Sci-fi neon green pointer
+            )
+
+            // Draw a subtle center point indicator
+            drawCircle(
+                color = Color(0xFF00FF88).copy(alpha = 0.4f),
+                radius = 2.dp.toPx()
+            )
+        }
     }
 }
+
 

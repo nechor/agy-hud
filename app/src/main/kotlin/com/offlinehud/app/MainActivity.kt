@@ -748,55 +748,55 @@ fun SpeedometerGauge(
             val fillPercentage = (animatedSpeed / maxSpeedScale).coerceIn(0f, 1f)
             val activeSweep = fillPercentage * 240f
             
-            // Speedometer ticks aligned to the ellipse (0 to 170 km/h with 10 km/h intervals -> 18 ticks)
-            // Drawn BEFORE the active arc so they appear "underneath" it
-            val tickCount = 18
-            for (i in 0 until tickCount) {
-                val angleDeg = 150f + (i * (240f / (tickCount - 1)))
-                val angleRad = Math.toRadians(angleDeg.toDouble())
-                val speedVal = i * 10
-                val isProminent = (speedVal == 0 || speedVal == 50 || speedVal == 100 || speedVal == 150)
-                
-                val tickLength = if (isProminent) 20.dp.toPx() else 14.dp.toPx()
-                val tickWidth = if (isProminent) 3.5.dp.toPx() else 2.dp.toPx()
-                val tickColor = if (isProminent) speedColor else speedColor.copy(alpha = 0.5f)
-                
-                val halfLen = tickLength / 2
-                val aStart = a - halfLen
-                val aEnd = a + halfLen
-                val bStart = b - halfLen
-                val bEnd = b + halfLen
-
-                val startX = center.x + aStart * Math.cos(angleRad).toFloat()
-                val startY = center.y + bStart * Math.sin(angleRad).toFloat()
-                val endX = center.x + aEnd * Math.cos(angleRad).toFloat()
-                val endY = center.y + bEnd * Math.sin(angleRad).toFloat()
-                
-                drawLine(
-                    color = tickColor,
-                    start = Offset(startX, startY),
-                    end = Offset(endX, endY),
-                    strokeWidth = tickWidth
-                )
-            }
-
-            // Active neon gauge ellipse arc
-            drawArc(
-                brush = Brush.sweepGradient(
-                    colors = listOf(
-                        speedColor.copy(alpha = 0.3f),
-                        speedColor,
-                        speedColor
-                    ),
-                    center = center
-                ),
-                startAngle = 150f,
-                sweepAngle = activeSweep,
-                useCenter = false,
-                topLeft = topLeft,
-                size = arcSize,
-                style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
-            )
+             // Speedometer ticks aligned to the ellipse (0 to 170 km/h with 10 km/h intervals -> 18 ticks)
+             // Drawn BEFORE the active arc so they appear "underneath" it
+             val tickCount = 18
+             for (i in 0 until tickCount) {
+                 val angleDeg = 150f + (i * (240f / (tickCount - 1)))
+                 val angleRad = Math.toRadians(angleDeg.toDouble())
+                 val speedVal = i * 10
+                 val isProminent = (speedVal == 0 || speedVal == 50 || speedVal == 100 || speedVal == 150)
+                 
+                 val tickLength = 14.dp.toPx()
+                 val tickWidth = if (isProminent) 3.5.dp.toPx() else 1.8.dp.toPx()
+                 val tickColor = if (isProminent) speedColor else speedColor.copy(alpha = 0.6f)
+                 
+                 val halfLen = tickLength / 2
+                 val aStart = a - halfLen
+                 val aEnd = a + halfLen
+                 val bStart = b - halfLen
+                 val bEnd = b + halfLen
+ 
+                 val startX = center.x + aStart * Math.cos(angleRad).toFloat()
+                 val startY = center.y + bStart * Math.sin(angleRad).toFloat()
+                 val endX = center.x + aEnd * Math.cos(angleRad).toFloat()
+                 val endY = center.y + bEnd * Math.sin(angleRad).toFloat()
+                 
+                 drawLine(
+                     color = tickColor,
+                     start = Offset(startX, startY),
+                     end = Offset(endX, endY),
+                     strokeWidth = tickWidth
+                 )
+             }
+ 
+             // Active neon gauge ellipse arc
+             drawArc(
+                 brush = Brush.sweepGradient(
+                     colors = listOf(
+                         speedColor.copy(alpha = 0.3f),
+                         speedColor.copy(alpha = 0.75f),
+                         speedColor.copy(alpha = 0.75f)
+                     ),
+                     center = center
+                 ),
+                 startAngle = 150f,
+                 sweepAngle = activeSweep,
+                 useCenter = false,
+                 topLeft = topLeft,
+                 size = arcSize,
+                 style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
+             )
         }
         
         Column(

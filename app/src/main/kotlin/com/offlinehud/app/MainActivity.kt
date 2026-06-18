@@ -509,10 +509,11 @@ fun HudScreen(
                         .fillMaxWidth()
                         .align(Alignment.TopCenter),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.Top
                 ) {
                     // GPS Indicator on Top-Left
                     Row(
+                        modifier = Modifier.padding(top = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
@@ -538,19 +539,19 @@ fun HudScreen(
                         }
                     }
 
-                    // Small compass on Top-Right
+                    // Enlarge compass on Top-Right
                     CompassWidget(
                         bearing = bearing,
-                        modifier = Modifier.size(54.dp)
+                        modifier = Modifier.size(80.dp)
                     )
                 }
  
-                // Speedometer Gauge Centered below indicators
+                // Speedometer Gauge Centered below indicators, lowered further by increasing top padding to decrease distance from bottom
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .fillMaxHeight()
-                        .padding(top = 22.dp),
+                        .padding(top = 52.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     SpeedometerGauge(
@@ -728,9 +729,10 @@ fun SpeedometerGauge(
             
             val a = (size.width - 2 * paddingX) / 2
             val b = (size.height - 2 * paddingY) / 2
-            val center = Offset(paddingX + a, paddingY + b)
+            val shiftY = 34.dp.toPx()
+            val center = Offset(paddingX + a, paddingY + b + shiftY)
             val arcSize = androidx.compose.ui.geometry.Size(a * 2, b * 2)
-            val topLeft = Offset(paddingX, paddingY)
+            val topLeft = Offset(paddingX, paddingY + shiftY)
 
             // Draw background ellipse arc
             drawArc(
@@ -811,7 +813,7 @@ fun SpeedometerGauge(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
-            modifier = Modifier.wrapContentSize()
+            modifier = Modifier.wrapContentSize().offset(y = 42.dp)
         ) {
             Text(
                 text = speed.roundToInt().toString(),
@@ -1259,10 +1261,16 @@ fun SteppedNeonChart(
                     lineTo(prevX, height)
                     close()
                 }
+                val alphaVal = when (segmentColor.value) {
+                    Color(0xFFFF0055).value -> 0.60f // Red (very dark luminance, needs strong alpha boost)
+                    Color(0xFFFFB74D).value -> 0.45f // Yellow/Orange (medium-high luminance)
+                    Color(0xFF00F0FF).value -> 0.50f // Blue/Cyan (medium luminance)
+                    else -> 0.35f                    // Green (high luminance) / default
+                }
                 drawPath(
                     path = slicePath,
                     brush = Brush.verticalGradient(
-                        colors = listOf(segmentColor.copy(alpha = 0.15f), Color.Transparent),
+                        colors = listOf(segmentColor.copy(alpha = alphaVal), segmentColor.copy(alpha = 0.0f)),
                         startY = minOf(prevY, y),
                         endY = height
                     )

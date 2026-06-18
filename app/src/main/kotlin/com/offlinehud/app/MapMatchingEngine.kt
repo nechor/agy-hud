@@ -27,11 +27,12 @@ class MapMatchingEngine(private val baseDir: File) {
     fun initialize(onComplete: (Boolean) -> Unit) {
         val graphFolder = File(baseDir, "graphhopper")
         if (!graphFolder.exists() || graphFolder.list()?.isEmpty() == true) {
-            Log.w(TAG, "GraphHopper directory is empty or does not exist: ${graphFolder.absolutePath}. Enabling mock offline matching engine.")
-            isInitialized = true
-            onComplete(true)
+            Log.w(TAG, "GraphHopper directory is empty or does not exist: ${graphFolder.absolutePath}. Mock offline matching engine enabled.")
+            isInitialized = false
+            onComplete(false)
             return
         }
+
 
         Thread {
             try {
@@ -95,4 +96,6 @@ class MapMatchingEngine(private val baseDir: File) {
     }
 
     fun isReady(): Boolean = isInitialized
+    fun isMockMode(): Boolean = !isInitialized || hopper == null
 }
+

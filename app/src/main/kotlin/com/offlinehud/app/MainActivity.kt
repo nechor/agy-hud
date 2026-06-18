@@ -234,15 +234,59 @@ class MainActivity : ComponentActivity(), LocationListener {
             }
         }
 
-        // Cache/optimize Map Matching queries if the driver hasn't moved much (less than 5 meters)
+        // Cache/optimize Map Matching queries if the driver hasn't moved much (less than 10 meters)
         val distanceMoved = calculateDistanceMeters(lat, lon, lastQueryLat, lastQueryLon)
-        val limit = if (distanceMoved >= 5.0 || speedLimit.value == null) {
+        val limit = if (distanceMoved >= 10.0 || speedLimit.value == null) {
             lastQueryLat = lat
             lastQueryLon = lon
-            mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
+
+            if (mapMatchingEngine.isMockMode()) {
+                val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
+                val cachedLimit = onlineLimitCache[gridKey]
+                if (cachedLimit != null) {
+                    if (cachedLimit == -1) null else cachedLimit
+                } else {
+                    fetchSpeedLimitOnline(lat, lon) { onlineLimit ->
+                        if (onlineLimit != null) {
+                            runOnUiThread {
+                                speedLimit.value = onlineLimit
+                                lastValidSpeedLimit = onlineLimit
+                                lastSpeedLimitTime = System.currentTimeMillis()
+                            }
+                        }
+                    }
+                    lastValidSpeedLimit
+                }
+            } else {
+                val offlineLimit = mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
+                if (offlineLimit == null) {
+                    val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
+                    val cachedLimit = onlineLimitCache[gridKey]
+                    if (cachedLimit != null) {
+                        if (cachedLimit == -1) null else cachedLimit
+                    } else {
+                        fetchSpeedLimitOnline(lat, lon) { onlineLimit ->
+                            if (onlineLimit != null) {
+                                runOnUiThread {
+                                    speedLimit.value = onlineLimit
+                                    lastValidSpeedLimit = onlineLimit
+                                    lastSpeedLimitTime = System.currentTimeMillis()
+                                }
+                            }
+                        }
+                        lastValidSpeedLimit
+                    }
+                } else {
+                    offlineLimit
+                }
+            }
         } else {
             speedLimit.value
         }
+
+
+
+
         
         val now = System.currentTimeMillis()
         if (limit != null) {
@@ -293,17 +337,11 @@ class MainActivity : ComponentActivity(), LocationListener {
             if (!isSimulatorActive.value) return
             val currentPoint = testTrack[simulatorIndex]
             
-            // For testing: if map files are missing, simulate speed limit of 50 km/h
-            val simulatedLimit = if (mapMatchingEngine.isReady()) {
-                mapMatchingEngine.getSpeedLimit(currentPoint.first, currentPoint.second)?.roundToInt()
-            } else {
-                50 // Demo limit
+            processNewLocation(currentPoint.first, currentPoint.second, currentPoint.third)
+            if (speedLimit.value == null) {
+                speedLimit.value = 50 // Fallback demo limit
             }
 
-            processNewLocation(currentPoint.first, currentPoint.second, currentPoint.third)
-            if (simulatedLimit != null || !mapMatchingEngine.isReady()) {
-                speedLimit.value = simulatedLimit
-            }
 
             simulatorIndex = (simulatorIndex + 1) % testTrack.size
             simulatorHandler.postDelayed(this, 1500)
@@ -388,7 +426,104 @@ class MainActivity : ComponentActivity(), LocationListener {
         })
     }
 
+    private val onlineLimitCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val pendingOnlineRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun fetchSpeedLimitOnline(lat: Double, lon: Double, callback: (Int?) -> Unit) {
+        // Round coordinates to 3 decimal places for stable grid cache key (approx 110m grid)
+        val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
+
+        
+        val cached = onlineLimitCache[gridKey]
+        if (cached != null) {
+            if (cached == -1) {
+                callback(null)
+            } else {
+                callback(cached)
+            }
+            return
+        }
+
+        if (!pendingOnlineRequests.add(gridKey)) {
+            return
+        }
+
+        Thread {
+            try {
+                val query = "[out:json][timeout:5];way(around:300.0,$lat,$lon)[highway];out tags 1;"
+
+                val url = java.net.URL("https://overpass-api.de/api/interpreter?data=" + java.net.URLEncoder.encode(query, "UTF-8"))
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                
+                if (conn.responseCode == 200) {
+                    val response = conn.inputStream.bufferedReader().use { it.readText() }
+                    val limit = parseOverpassResponse(response)
+                    if (limit != null) {
+                        onlineLimitCache[gridKey] = limit
+                        callback(limit)
+                    } else {
+                        onlineLimitCache[gridKey] = -1
+                        callback(null)
+                    }
+                } else {
+                    Log.e("MainActivity", "Overpass API error response code: ${conn.responseCode}")
+                    callback(null)
+                }
+
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to fetch speed limit online", e)
+                callback(null)
+            } finally {
+                pendingOnlineRequests.remove(gridKey)
+            }
+        }.start()
+    }
+
+    private fun parseOverpassResponse(jsonStr: String): Int? {
+        try {
+            val root = org.json.JSONObject(jsonStr)
+            val elements = root.getJSONArray("elements")
+            if (elements.length() > 0) {
+                val element = elements.getJSONObject(0)
+                if (element.has("tags")) {
+                    val tags = element.getJSONObject("tags")
+                    if (tags.has("maxspeed")) {
+                        val maxspeedStr = tags.getString("maxspeed")
+                        val digits = maxspeedStr.filter { it.isDigit() }
+                        if (digits.isNotEmpty()) {
+                            var limit = digits.toInt()
+                            if (maxspeedStr.contains("mph", ignoreCase = true)) {
+                                limit = (limit * 1.60934).roundToInt()
+                            }
+                            return limit
+                        }
+                    }
+                    if (tags.has("highway")) {
+                        val highway = tags.getString("highway")
+                        return when (highway) {
+                            "motorway" -> 140
+                            "trunk" -> 120
+                            "primary" -> 90
+                            "secondary" -> 90
+                            "tertiary" -> 90
+                            "residential" -> 50
+                            "living_street" -> 20
+                            else -> 50
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to parse Overpass response", e)
+        }
+        return null
+    }
+
     override fun onDestroy() {
+
         super.onDestroy()
         locationManager.removeUpdates(this)
         simulatorHandler.removeCallbacks(simulatorRunnable)

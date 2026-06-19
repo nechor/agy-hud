@@ -75,18 +75,35 @@ class MainActivity : ComponentActivity(), LocationListener {
     private var lastSpeedLimitTime: Long = 0L
     private val limitExpiryMs = 5000L // 5 seconds hysteresis
 
-    // Simulator properties
-    private val isSimulatorActive = mutableStateOf(false)
-    private var simulatorIndex = 0
-    // A synthetic track containing (lat, lon, simulated_speed_kmh) for test drives
-    private val testTrack = listOf(
-        Triple(52.2297, 21.0122, 50.0), // Start: Warsaw
-        Triple(52.2300, 21.0130, 52.0),
-        Triple(52.2305, 21.0145, 68.0), // Exceeding 50 limit!
-        Triple(52.2310, 21.0160, 85.0), // High speed
-        Triple(52.2315, 21.0175, 45.0),
-        Triple(52.2320, 21.0190, 48.0)
-    )
+    private var lastLocationTime = System.currentTimeMillis()
+    private val gpsTimeoutHandler = Handler(Looper.getMainLooper())
+    private val gpsTimeoutRunnable = object : Runnable {
+        override fun run() {
+            val now = System.currentTimeMillis()
+            if (now - lastLocationTime > 2000L) {
+                speed.value = 0.0
+                speedHistory.add(0f)
+                if (speedHistory.size > 25) speedHistory.removeAt(0)
+                speedColorHistory.add(Color(0xFF00F0FF))
+                if (speedColorHistory.size > 25) speedColorHistory.removeAt(0)
+            }
+            gpsTimeoutHandler.postDelayed(this, 1000L)
+        }
+    }
+
+    // Speed limit query status history (last 10 attempts)
+    val fetchHistory = mutableStateListOf<Int>()
+    val apiFetchCount = mutableStateOf(0)
+    val cacheFetchCount = mutableStateOf(0)
+
+    private fun recordFetchResult(status: Int) { // 0 = fail, 1 = api_success, 2 = cache_success
+        runOnUiThread {
+            fetchHistory.add(status)
+            if (fetchHistory.size > 10) {
+                fetchHistory.removeAt(0)
+            }
+        }
+    }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -106,6 +123,9 @@ class MainActivity : ComponentActivity(), LocationListener {
 
         srtmProvider = SrtmElevationProvider(filesDir)
         mapMatchingEngine = MapMatchingEngine(filesDir)
+
+        gpsTimeoutHandler.post(gpsTimeoutRunnable)
+        loadCacheFromFile()
 
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
@@ -130,13 +150,14 @@ class MainActivity : ComponentActivity(), LocationListener {
                     isMirror = isSymmetricMirror.value,
                     gpsStatus = gpsStatus.value,
                     mapStatus = mapStatus.value,
-                    isSimulatorActive = isSimulatorActive.value,
                     speedHistory = speedHistory,
                     speedColorHistory = speedColorHistory,
                     elevationHistory = elevationHistory,
                     downloadProgress = downloadProgress.value,
+                    fetchHistory = fetchHistory,
+                    apiFetchCount = apiFetchCount.value,
+                    cacheFetchCount = cacheFetchCount.value,
                     onToggleMirror = { isSymmetricMirror.value = !isSymmetricMirror.value },
-                    onToggleSimulator = { toggleSimulator() },
                     onDownloadData = { downloadOfflineData() }
                 )
             }
@@ -175,7 +196,6 @@ class MainActivity : ComponentActivity(), LocationListener {
     }
 
     override fun onLocationChanged(location: Location) {
-        if (isSimulatorActive.value) return // Don't let real GPS override simulator
         processNewLocation(location.latitude, location.longitude, (location.speed * 3.6))
     }
 
@@ -200,6 +220,7 @@ class MainActivity : ComponentActivity(), LocationListener {
     }
 
     private fun processNewLocation(lat: Double, lon: Double, currentSpeedKmh: Double) {
+        lastLocationTime = System.currentTimeMillis()
         speed.value = currentSpeedKmh
         gpsStatus.value = String.format("GPS Fix: %.4f, %.4f", lat, lon)
 
@@ -219,7 +240,7 @@ class MainActivity : ComponentActivity(), LocationListener {
         if (elevationHistory.size > 25) elevationHistory.removeAt(0)
 
         // Calculate bearing based on traveled points history (minimum 3 km/h to filter GPS noise)
-        if (currentSpeedKmh > 3.0 || isSimulatorActive.value) {
+        if (currentSpeedKmh > 3.0) {
             locationHistory.add(Pair(lat, lon))
             if (locationHistory.size > 8) {
                 locationHistory.removeAt(0)
@@ -240,11 +261,35 @@ class MainActivity : ComponentActivity(), LocationListener {
             lastQueryLat = lat
             lastQueryLon = lon
 
-            if (mapMatchingEngine.isMockMode()) {
+            val localLimit = mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
+            if (localLimit != null) {
+                runOnUiThread {
+                    cacheFetchCount.value += 1
+                }
+                recordFetchResult(2) // local success -> yellow
+                localLimit
+            } else {
                 val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
-                val cachedLimit = onlineLimitCache[gridKey]
+                val cached = onlineLimitCache[gridKey]
+                val nowTime = System.currentTimeMillis()
+                val oneDayMs = 24 * 60 * 60 * 1000L
+                val cachedLimit = if (cached != null && (nowTime - cached.timestamp < oneDayMs)) {
+                    if (cached.limit == -1) -1 else cached.limit
+                } else {
+                    null
+                }
+
                 if (cachedLimit != null) {
-                    if (cachedLimit == -1) null else cachedLimit
+                    if (cachedLimit == -1) {
+                        recordFetchResult(0) // failure -> red
+                        null
+                    } else {
+                        runOnUiThread {
+                            cacheFetchCount.value += 1
+                        }
+                        recordFetchResult(2) // cache success -> yellow
+                        cachedLimit
+                    }
                 } else {
                     fetchSpeedLimitOnline(lat, lon) { onlineLimit ->
                         if (onlineLimit != null) {
@@ -253,41 +298,18 @@ class MainActivity : ComponentActivity(), LocationListener {
                                 lastValidSpeedLimit = onlineLimit
                                 lastSpeedLimitTime = System.currentTimeMillis()
                             }
+                            recordFetchResult(1) // api success -> green
+                        } else {
+                            recordFetchResult(0) // failure -> red
                         }
                     }
-                    lastValidSpeedLimit
-                }
-            } else {
-                val offlineLimit = mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
-                if (offlineLimit == null) {
-                    val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
-                    val cachedLimit = onlineLimitCache[gridKey]
-                    if (cachedLimit != null) {
-                        if (cachedLimit == -1) null else cachedLimit
-                    } else {
-                        fetchSpeedLimitOnline(lat, lon) { onlineLimit ->
-                            if (onlineLimit != null) {
-                                runOnUiThread {
-                                    speedLimit.value = onlineLimit
-                                    lastValidSpeedLimit = onlineLimit
-                                    lastSpeedLimitTime = System.currentTimeMillis()
-                                }
-                            }
-                        }
-                        lastValidSpeedLimit
-                    }
-                } else {
-                    offlineLimit
+                    null
                 }
             }
         } else {
             speedLimit.value
         }
 
-
-
-
-        
         val now = System.currentTimeMillis()
         if (limit != null) {
             speedLimit.value = limit
@@ -331,34 +353,7 @@ class MainActivity : ComponentActivity(), LocationListener {
         return (Math.toDegrees(bearingRad) + 360.0) % 360.0
     }
 
-    private val simulatorHandler = Handler(Looper.getMainLooper())
-    private val simulatorRunnable = object : Runnable {
-        override fun run() {
-            if (!isSimulatorActive.value) return
-            val currentPoint = testTrack[simulatorIndex]
-            
-            processNewLocation(currentPoint.first, currentPoint.second, currentPoint.third)
-            if (speedLimit.value == null) {
-                speedLimit.value = 50 // Fallback demo limit
-            }
 
-
-            simulatorIndex = (simulatorIndex + 1) % testTrack.size
-            simulatorHandler.postDelayed(this, 1500)
-        }
-    }
-
-    private fun toggleSimulator() {
-        if (isSimulatorActive.value) {
-            isSimulatorActive.value = false
-            simulatorHandler.removeCallbacks(simulatorRunnable)
-            startLocationUpdates()
-        } else {
-            isSimulatorActive.value = true
-            simulatorIndex = 0
-            simulatorHandler.post(simulatorRunnable)
-        }
-    }
 
     /**
      * Creates a dummy SRTM file for the specified GPS grid coordinates if not already present.
@@ -426,26 +421,84 @@ class MainActivity : ComponentActivity(), LocationListener {
         })
     }
 
-    private val onlineLimitCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private class CacheEntry(val limit: Int, val timestamp: Long)
+    private val onlineLimitCache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
     private val pendingOnlineRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun loadCacheFromFile() {
+        val file = File(filesDir, "speed_limits_cache.json")
+        if (!file.exists()) return
+        Thread {
+            try {
+                val jsonStr = file.readText()
+                val json = org.json.JSONObject(jsonStr)
+                val keys = json.keys()
+                val now = System.currentTimeMillis()
+                val oneDayMs = 24 * 60 * 60 * 1000L
+                while (keys.hasNext()) {
+                    val key = keys.next() as String
+                    val obj = json.getJSONObject(key)
+                    val limit = obj.getInt("limit")
+                    val timestamp = obj.getLong("timestamp")
+                    if (now - timestamp < oneDayMs) {
+                        onlineLimitCache[key] = CacheEntry(limit, timestamp)
+                    }
+                }
+                Log.d("MainActivity", "Loaded ${onlineLimitCache.size} speed limit cache entries from disk.")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to load speed limit cache from disk", e)
+            }
+        }.start()
+    }
+
+    private fun saveCacheToFile() {
+        Thread {
+            try {
+                val json = org.json.JSONObject()
+                val now = System.currentTimeMillis()
+                val oneDayMs = 24 * 60 * 60 * 1000L
+                for ((key, entry) in onlineLimitCache) {
+                    if (now - entry.timestamp < oneDayMs) {
+                        val obj = org.json.JSONObject().apply {
+                            put("limit", entry.limit)
+                            put("timestamp", entry.timestamp)
+                        }
+                        json.put(key, obj)
+                    }
+                }
+                val file = File(filesDir, "speed_limits_cache.json")
+                file.writeText(json.toString())
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to save speed limit cache to disk", e)
+            }
+        }.start()
+    }
 
     private fun fetchSpeedLimitOnline(lat: Double, lon: Double, callback: (Int?) -> Unit) {
         // Round coordinates to 3 decimal places for stable grid cache key (approx 110m grid)
         val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
 
-        
         val cached = onlineLimitCache[gridKey]
-        if (cached != null) {
-            if (cached == -1) {
+        val nowTime = System.currentTimeMillis()
+        val oneDayMs = 24 * 60 * 60 * 1000L
+        if (cached != null && (nowTime - cached.timestamp < oneDayMs)) {
+            if (cached.limit == -1) {
                 callback(null)
             } else {
-                callback(cached)
+                runOnUiThread {
+                    cacheFetchCount.value += 1
+                }
+                callback(cached.limit)
             }
             return
         }
 
         if (!pendingOnlineRequests.add(gridKey)) {
             return
+        }
+
+        runOnUiThread {
+            apiFetchCount.value += 1
         }
 
         Thread {
@@ -455,6 +508,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                 val url = java.net.URL("https://overpass-api.de/api/interpreter?data=" + java.net.URLEncoder.encode(query, "UTF-8"))
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
+                conn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
                 conn.connectTimeout = 5000
                 conn.readTimeout = 5000
                 
@@ -462,10 +516,12 @@ class MainActivity : ComponentActivity(), LocationListener {
                     val response = conn.inputStream.bufferedReader().use { it.readText() }
                     val limit = parseOverpassResponse(response)
                     if (limit != null) {
-                        onlineLimitCache[gridKey] = limit
+                        onlineLimitCache[gridKey] = CacheEntry(limit, System.currentTimeMillis())
+                        saveCacheToFile()
                         callback(limit)
                     } else {
-                        onlineLimitCache[gridKey] = -1
+                        onlineLimitCache[gridKey] = CacheEntry(-1, System.currentTimeMillis())
+                        saveCacheToFile()
                         callback(null)
                     }
                 } else {
@@ -523,10 +579,9 @@ class MainActivity : ComponentActivity(), LocationListener {
     }
 
     override fun onDestroy() {
-
         super.onDestroy()
         locationManager.removeUpdates(this)
-        simulatorHandler.removeCallbacks(simulatorRunnable)
+        gpsTimeoutHandler.removeCallbacks(gpsTimeoutRunnable)
     }
 
     override fun onProviderEnabled(provider: String) {}
@@ -543,13 +598,14 @@ fun HudScreen(
     isMirror: Boolean,
     gpsStatus: String,
     mapStatus: String,
-    isSimulatorActive: Boolean,
     speedHistory: List<Float>,
     speedColorHistory: List<Color>,
     elevationHistory: List<Float>,
     downloadProgress: Float?,
+    fetchHistory: List<Int>,
+    apiFetchCount: Int,
+    cacheFetchCount: Int,
     onToggleMirror: () -> Unit,
-    onToggleSimulator: () -> Unit,
     onDownloadData: () -> Unit
 ) {
     val context = LocalContext.current
@@ -646,28 +702,45 @@ fun HudScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top
                 ) {
-                    // GPS Indicator on Top-Left
-                    Row(
+                    // GPS Indicator and Fetch History on Top-Left
+                    Column(
                         modifier = Modifier.padding(top = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        SignalStrengthIndicator(status = gpsStatus)
-                        Column {
-                            val isFix = gpsStatus.contains("Fix", ignoreCase = true)
-                            val isSearching = gpsStatus.contains("Searching", ignoreCase = true)
-                            val gpsDisplayLabel = when {
-                                isFix -> {
-                                    val coords = gpsStatus.substringAfter("Fix:").trim()
-                                    "GPS: FIX [$coords]"
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            SignalStrengthIndicator(status = gpsStatus)
+                            Column {
+                                val isFix = gpsStatus.contains("Fix", ignoreCase = true)
+                                val isSearching = gpsStatus.contains("Searching", ignoreCase = true)
+                                val gpsDisplayLabel = when {
+                                    isFix -> {
+                                        val coords = gpsStatus.substringAfter("Fix:").trim()
+                                        "GPS: FIX [$coords]"
+                                    }
+                                    isSearching -> "GPS: SEARCHING..."
+                                    else -> "GPS: OFFLINE"
                                 }
-                                isSearching -> "GPS: SEARCHING..."
-                                else -> "GPS: OFFLINE"
+                                Text(
+                                    text = gpsDisplayLabel.uppercase(),
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 8.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FetchHistoryBars(fetchHistory = fetchHistory)
                             Text(
-                                text = gpsDisplayLabel.uppercase(),
-                                color = Color(0xFF94A3B8),
-                                fontSize = 8.sp,
+                                text = "API: $apiFetchCount  CACHE: $cacheFetchCount",
+                                color = Color(0xFF00F0FF),
+                                fontSize = 9.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold
                             )
@@ -825,10 +898,8 @@ fun HudScreen(
             // 5. BOTTOM CONTROL CONSOLE
             SciFiBottomConsole(
                 isMirror = isMirror,
-                isSimulatorActive = isSimulatorActive,
                 downloadProgress = downloadProgress,
                 onToggleMirror = onToggleMirror,
-                onToggleSimulator = onToggleSimulator,
                 onDownloadData = onDownloadData
             )
         }
@@ -1126,6 +1197,34 @@ fun SignalStrengthIndicator(
 }
 
 @Composable
+fun FetchHistoryBars(fetchHistory: List<Int>, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.padding(top = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        for (i in 0 until 10) {
+            val color = when {
+                i < fetchHistory.size -> {
+                    when (fetchHistory[i]) {
+                        1 -> Color(0xFF00FF88) // Green (API Success)
+                        2 -> Color(0xFFFFB74D) // Yellow (Cache Hit)
+                        else -> Color(0xFFFF0055) // Red (Failure)
+                    }
+                }
+                else -> Color(0xFF334155) // Dark gray for empty slots
+            }
+            Box(
+                modifier = Modifier
+                    .size(width = 5.dp, height = 12.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(color)
+            )
+        }
+    }
+}
+
+@Composable
 fun SciFiHeader(
     gpsStatus: String,
     mapStatus: String,
@@ -1200,10 +1299,8 @@ fun SciFiHeader(
 @Composable
 fun SciFiBottomConsole(
     isMirror: Boolean,
-    isSimulatorActive: Boolean,
     downloadProgress: Float?,
     onToggleMirror: () -> Unit,
-    onToggleSimulator: () -> Unit,
     onDownloadData: () -> Unit
 ) {
     Box(
@@ -1306,31 +1403,6 @@ fun SciFiBottomConsole(
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = 0.5.sp,
                         textAlign = TextAlign.Center
-                    )
-                }
-
-                // Demo Drive / Simulation control (toggles between DEMO and REAL GPS measurement)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF0F172A).copy(alpha = 0.6f))
-                        .border(
-                            width = 1.dp,
-                            color = if (isSimulatorActive) Color(0xFFFFB74D) else Color(0xFF00FF88).copy(alpha = 0.6f),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        .clickable { onToggleSimulator() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (isSimulatorActive) "MODE: DEMO" else "MODE: REAL",
-                        color = if (isSimulatorActive) Color(0xFFFFB74D) else Color(0xFF00FF88),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.5.sp
                     )
                 }
             }

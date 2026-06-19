@@ -35,8 +35,13 @@ class MapMatchingEngineTest {
         }
 
         latch.await(2, TimeUnit.SECONDS)
-        assertFalse("Initialization should fail when graphhopper folder is missing", initResult)
-        assertFalse(engine.isReady())
+        assertFalse("Initialization callback should receive false when graphhopper folder is missing", initResult)
+        org.junit.Assert.assertTrue("Engine should be ready in mock mode", engine.isReady())
+        org.junit.Assert.assertTrue("Engine should be in mock mode", engine.isMockMode())
+        
+        // Mock speed limit verification for Warsaw coordinates
+        val limit = engine.getSpeedLimit(52.2297, 21.0122)
+        org.junit.Assert.assertEquals(50.0, limit ?: 0.0, 0.01)
     }
 
     @Test

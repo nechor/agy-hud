@@ -28,7 +28,7 @@ class MapMatchingEngine(private val baseDir: File) {
         val graphFolder = File(baseDir, "graphhopper")
         if (!graphFolder.exists() || graphFolder.list()?.isEmpty() == true) {
             Log.w(TAG, "GraphHopper directory is empty or does not exist: ${graphFolder.absolutePath}. Mock offline matching engine enabled.")
-            isInitialized = false
+            isInitialized = true
             onComplete(false)
             return
         }
@@ -70,7 +70,7 @@ class MapMatchingEngine(private val baseDir: File) {
                 latitude in 52.2290..52.2302 -> 50.0  // City street limit
                 latitude in 52.2302..52.2312 -> 70.0  // Radial road limit
                 latitude in 52.2312..52.2325 -> 90.0  // Expressway limit
-                else -> 50.0
+                else -> null
             }
         }
 

@@ -48,6 +48,14 @@ import kotlin.math.roundToInt
 import kotlin.math.floor
 import kotlin.math.abs
 
+data class OsmWay(
+    val id: Long,
+    val highway: String?,
+    val maxSpeed: Int?,
+    val name: String?,
+    val geometry: List<Pair<Double, Double>>
+)
+
 class MainActivity : ComponentActivity(), LocationListener {
 
     private lateinit var locationManager: LocationManager
@@ -74,6 +82,14 @@ class MainActivity : ComponentActivity(), LocationListener {
     private var lastValidSpeedLimit: Int? = null
     private var lastSpeedLimitTime: Long = 0L
     private val limitExpiryMs = 5000L // 5 seconds hysteresis
+
+    // Online Cache in 10km radius
+    private val cachedWays = mutableListOf<OsmWay>()
+    private var cacheCenterLat = 0.0
+    private var cacheCenterLon = 0.0
+    private val cacheRadiusMeters = 10000.0 // 10km
+    private val cacheTriggerDistanceMeters = 8000.0 // 8km trigger
+    private var isDownloadingCache = false
 
     // Simulator properties
     private val isSimulatorActive = mutableStateOf(false)
@@ -106,6 +122,7 @@ class MainActivity : ComponentActivity(), LocationListener {
 
         srtmProvider = SrtmElevationProvider(filesDir)
         mapMatchingEngine = MapMatchingEngine(filesDir)
+        loadCacheFromFile()
 
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
@@ -234,51 +251,23 @@ class MainActivity : ComponentActivity(), LocationListener {
             }
         }
 
-        // Cache/optimize Map Matching queries if the driver hasn't moved much (less than 10 meters)
+        // Cache/optimize Map Matching queries if the driver hasn't moved much (less than 5 meters)
         val distanceMoved = calculateDistanceMeters(lat, lon, lastQueryLat, lastQueryLon)
-        val limit = if (distanceMoved >= 10.0 || speedLimit.value == null) {
+        val limit = if (distanceMoved >= 5.0 || speedLimit.value == null) {
             lastQueryLat = lat
             lastQueryLon = lon
 
-            if (mapMatchingEngine.isMockMode()) {
-                val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
-                val cachedLimit = onlineLimitCache[gridKey]
-                if (cachedLimit != null) {
-                    if (cachedLimit == -1) null else cachedLimit
+            if (!mapMatchingEngine.isMockMode()) {
+                val offlineLimit = mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
+                if (offlineLimit != null) {
+                    offlineLimit
                 } else {
-                    fetchSpeedLimitOnline(lat, lon) { onlineLimit ->
-                        if (onlineLimit != null) {
-                            runOnUiThread {
-                                speedLimit.value = onlineLimit
-                                lastValidSpeedLimit = onlineLimit
-                                lastSpeedLimitTime = System.currentTimeMillis()
-                            }
-                        }
-                    }
-                    lastValidSpeedLimit
+                    // Fallback to online cache
+                    checkAndFetchOnlineCache(lat, lon)
                 }
             } else {
-                val offlineLimit = mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
-                if (offlineLimit == null) {
-                    val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
-                    val cachedLimit = onlineLimitCache[gridKey]
-                    if (cachedLimit != null) {
-                        if (cachedLimit == -1) null else cachedLimit
-                    } else {
-                        fetchSpeedLimitOnline(lat, lon) { onlineLimit ->
-                            if (onlineLimit != null) {
-                                runOnUiThread {
-                                    speedLimit.value = onlineLimit
-                                    lastValidSpeedLimit = onlineLimit
-                                    lastSpeedLimitTime = System.currentTimeMillis()
-                                }
-                            }
-                        }
-                        lastValidSpeedLimit
-                    }
-                } else {
-                    offlineLimit
-                }
+                // Online cache only
+                checkAndFetchOnlineCache(lat, lon)
             }
         } else {
             speedLimit.value
@@ -426,98 +415,291 @@ class MainActivity : ComponentActivity(), LocationListener {
         })
     }
 
-    private val onlineLimitCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
-    private val pendingOnlineRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-
-    private fun fetchSpeedLimitOnline(lat: Double, lon: Double, callback: (Int?) -> Unit) {
-        // Round coordinates to 3 decimal places for stable grid cache key (approx 110m grid)
-        val gridKey = String.format(java.util.Locale.US, "%.3f,%.3f", lat, lon)
-
-        
-        val cached = onlineLimitCache[gridKey]
-        if (cached != null) {
-            if (cached == -1) {
-                callback(null)
-            } else {
-                callback(cached)
+    private fun checkAndFetchOnlineCache(lat: Double, lon: Double): Int? {
+        val speedLimitCached = getSpeedLimitFromCache(lat, lon)
+        if (speedLimitCached == null) {
+            val distFromCenter = calculateDistanceMeters(lat, lon, cacheCenterLat, cacheCenterLon)
+            synchronized(cachedWays) {
+                if (cachedWays.isEmpty() || distFromCenter > 5000.0) {
+                    fetch10KmSpeedLimitArea(lat, lon)
+                }
             }
-            return
         }
+        return speedLimitCached
+    }
 
-        if (!pendingOnlineRequests.add(gridKey)) {
-            return
-        }
-
+    private fun fetch10KmSpeedLimitArea(lat: Double, lon: Double) {
+        if (isDownloadingCache) return
+        isDownloadingCache = true
         Thread {
             try {
-                val query = "[out:json][timeout:5];way(around:300.0,$lat,$lon)[highway];out tags 1;"
-
+                Log.d("MainActivity", "Fetching 10km speed limit area around $lat, $lon")
+                val query = "[out:json][timeout:30];way(around:10000.0,$lat,$lon)[highway~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)(_link)?$\"];out geom;"
                 val url = java.net.URL("https://overpass-api.de/api/interpreter?data=" + java.net.URLEncoder.encode(query, "UTF-8"))
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
+                conn.connectTimeout = 15000
+                conn.readTimeout = 15000
                 
                 if (conn.responseCode == 200) {
                     val response = conn.inputStream.bufferedReader().use { it.readText() }
-                    val limit = parseOverpassResponse(response)
-                    if (limit != null) {
-                        onlineLimitCache[gridKey] = limit
-                        callback(limit)
-                    } else {
-                        onlineLimitCache[gridKey] = -1
-                        callback(null)
+                    val ways = parseOsmWays(response)
+                    if (ways.isNotEmpty()) {
+                        synchronized(cachedWays) {
+                            cachedWays.clear()
+                            cachedWays.addAll(ways)
+                            cacheCenterLat = lat
+                            cacheCenterLon = lon
+                        }
+                        Log.d("MainActivity", "Successfully cached ${ways.size} ways for 10km radius")
+                        saveCacheToFile()
+                        val newLimit = getSpeedLimitFromCache(lat, lon)
+                        if (newLimit != null) {
+                            runOnUiThread {
+                                speedLimit.value = newLimit
+                                lastValidSpeedLimit = newLimit
+                                lastSpeedLimitTime = System.currentTimeMillis()
+                            }
+                        }
                     }
                 } else {
                     Log.e("MainActivity", "Overpass API error response code: ${conn.responseCode}")
-                    callback(null)
                 }
-
             } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to fetch speed limit online", e)
-                callback(null)
+                Log.e("MainActivity", "Failed to fetch speed limit area online", e)
             } finally {
-                pendingOnlineRequests.remove(gridKey)
+                isDownloadingCache = false
             }
         }.start()
     }
 
-    private fun parseOverpassResponse(jsonStr: String): Int? {
+    private fun saveCacheToFile() {
+        Thread {
+            try {
+                val file = File(filesDir, "cached_ways.json")
+                val root = org.json.JSONObject()
+                root.put("centerLat", cacheCenterLat)
+                root.put("centerLon", cacheCenterLon)
+                
+                val waysArray = org.json.JSONArray()
+                synchronized(cachedWays) {
+                    for (way in cachedWays) {
+                        val wayObj = org.json.JSONObject()
+                        wayObj.put("id", way.id)
+                        wayObj.put("highway", way.highway ?: "")
+                        wayObj.put("maxSpeed", way.maxSpeed ?: -1)
+                        wayObj.put("name", way.name ?: "")
+                        
+                        val geomArray = org.json.JSONArray()
+                        for (pt in way.geometry) {
+                            val ptObj = org.json.JSONObject()
+                            ptObj.put("lat", pt.first)
+                            ptObj.put("lon", pt.second)
+                            geomArray.put(ptObj)
+                        }
+                        wayObj.put("geometry", geomArray)
+                        waysArray.put(wayObj)
+                    }
+                }
+                root.put("ways", waysArray)
+                file.writeText(root.toString())
+                Log.d("MainActivity", "Saved ${cachedWays.size} ways to persistent cache file")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to save cache to file", e)
+            }
+        }.start()
+    }
+
+    private fun loadCacheFromFile() {
+        try {
+            val file = File(filesDir, "cached_ways.json")
+            if (file.exists()) {
+                val jsonStr = file.readText()
+                val root = org.json.JSONObject(jsonStr)
+                val centerLat = root.optDouble("centerLat", 0.0)
+                val centerLon = root.optDouble("centerLon", 0.0)
+                val waysArray = root.optJSONArray("ways")
+                val ways = mutableListOf<OsmWay>()
+                if (waysArray != null) {
+                    for (i in 0 until waysArray.length()) {
+                        val wayObj = waysArray.getJSONObject(i)
+                        val id = wayObj.getLong("id")
+                        val highway = wayObj.optString("highway").let { if (it.isEmpty()) null else it }
+                        val maxSpeedRaw = wayObj.optInt("maxSpeed", -1)
+                        val maxSpeed = if (maxSpeedRaw == -1) null else maxSpeedRaw
+                        val name = wayObj.optString("name").let { if (it.isEmpty()) null else it }
+                        
+                        val geomArray = wayObj.optJSONArray("geometry")
+                        val geometry = mutableListOf<Pair<Double, Double>>()
+                        if (geomArray != null) {
+                            for (j in 0 until geomArray.length()) {
+                                val ptObj = geomArray.getJSONObject(j)
+                                geometry.add(Pair(ptObj.getDouble("lat"), ptObj.getDouble("lon")))
+                            }
+                        }
+                        if (geometry.isNotEmpty()) {
+                            ways.add(OsmWay(id, highway, maxSpeed, name, geometry))
+                        }
+                    }
+                }
+                synchronized(cachedWays) {
+                    cachedWays.clear()
+                    cachedWays.addAll(ways)
+                    cacheCenterLat = centerLat
+                    cacheCenterLon = centerLon
+                }
+                Log.d("MainActivity", "Loaded ${ways.size} ways from persistent cache file")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to load cache from file", e)
+        }
+    }
+
+    private fun parseOsmWays(jsonStr: String): List<OsmWay> {
+        val ways = mutableListOf<OsmWay>()
         try {
             val root = org.json.JSONObject(jsonStr)
+            if (!root.has("elements")) return ways
             val elements = root.getJSONArray("elements")
-            if (elements.length() > 0) {
-                val element = elements.getJSONObject(0)
-                if (element.has("tags")) {
-                    val tags = element.getJSONObject("tags")
-                    if (tags.has("maxspeed")) {
-                        val maxspeedStr = tags.getString("maxspeed")
+            for (i in 0 until elements.length()) {
+                val element = elements.getJSONObject(i)
+                val type = element.optString("type")
+                if (type == "way") {
+                    val id = element.getLong("id")
+                    val tags = element.optJSONObject("tags")
+                    val highway = tags?.optString("highway")
+                    val maxspeedStr = tags?.optString("maxspeed")
+                    val name = tags?.optString("name")
+                    
+                    var maxSpeed: Int? = null
+                    if (maxspeedStr != null && maxspeedStr.isNotEmpty()) {
                         val digits = maxspeedStr.filter { it.isDigit() }
                         if (digits.isNotEmpty()) {
                             var limit = digits.toInt()
                             if (maxspeedStr.contains("mph", ignoreCase = true)) {
                                 limit = (limit * 1.60934).roundToInt()
                             }
-                            return limit
+                            maxSpeed = limit
                         }
                     }
-                    if (tags.has("highway")) {
-                        val highway = tags.getString("highway")
-                        return when (highway) {
-                            "motorway" -> 140
-                            "trunk" -> 120
-                            "primary" -> 90
-                            "secondary" -> 90
-                            "tertiary" -> 90
-                            "residential" -> 50
-                            "living_street" -> 20
-                            else -> 50
+                    
+                    val geometry = mutableListOf<Pair<Double, Double>>()
+                    val geomArray = element.optJSONArray("geometry")
+                    if (geomArray != null) {
+                        for (j in 0 until geomArray.length()) {
+                            val pt = geomArray.getJSONObject(j)
+                            val lat = pt.getDouble("lat")
+                            val lon = pt.getDouble("lon")
+                            geometry.add(Pair(lat, lon))
                         }
+                    }
+                    
+                    if (geometry.isNotEmpty()) {
+                        ways.add(OsmWay(id, highway, maxSpeed, name, geometry))
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to parse Overpass response", e)
+            Log.e("MainActivity", "Failed to parse OSM ways", e)
+        }
+        return ways
+    }
+
+    private fun distanceToSegment(
+        pLat: Double, pLon: Double,
+        aLat: Double, aLon: Double,
+        bLat: Double, bLon: Double
+    ): Double {
+        val cosLat = Math.cos(Math.toRadians((aLat + bLat) / 2.0))
+        
+        val ax = aLon * cosLat
+        val ay = aLat
+        val bx = bLon * cosLat
+        val by = bLat
+        val px = pLon * cosLat
+        val py = pLat
+        
+        val dx = bx - ax
+        val dy = by - ay
+        
+        val lenSq = dx * dx + dy * dy
+        if (lenSq == 0.0) {
+            val rx = px - ax
+            val ry = py - ay
+            return Math.sqrt(rx * rx + ry * ry) * 111319.9
+        }
+        
+        var t = ((px - ax) * dx + (py - ay) * dy) / lenSq
+        t = t.coerceIn(0.0, 1.0)
+        
+        val closestX = ax + t * dx
+        val closestY = ay + t * dy
+        
+        val rx = px - closestX
+        val ry = py - closestY
+        return Math.sqrt(rx * rx + ry * ry) * 111319.9
+    }
+
+    private fun angleDifference(a: Double, b: Double): Double {
+        val diff = Math.abs(a - b) % 360.0
+        return if (diff > 180.0) 360.0 - diff else diff
+    }
+
+    private fun getSpeedLimitFromCache(lat: Double, lon: Double): Int? {
+        var closestWayLocal: OsmWay? = null
+        var minEffectiveDistance = Double.MAX_VALUE
+        val carBearing = bearing.value.toDouble()
+        val carSpeed = speed.value
+        
+        synchronized(cachedWays) {
+            for (way in cachedWays) {
+                val geom = way.geometry
+                if (geom.size < 2) continue
+                for (i in 0 until geom.size - 1) {
+                    val p1 = geom[i]
+                    val p2 = geom[i + 1]
+                    val physDist = distanceToSegment(
+                        lat, lon,
+                        p1.first, p1.second,
+                        p2.first, p2.second
+                    )
+                    
+                    var effectiveDist = physDist
+                    if (carSpeed > 5.0) {
+                        val segmentBearing = calculateBearing(p1.first, p1.second, p2.first, p2.second)
+                        val diffNormal = angleDifference(carBearing, segmentBearing)
+                        val diffReverse = angleDifference(carBearing, (segmentBearing + 180.0) % 360.0)
+                        val minAngleDiff = minOf(diffNormal, diffReverse)
+                        
+                        // Add distance penalty up to 80m for roads that are perpendicular (90 degrees mismatch)
+                        val penalty = (minAngleDiff / 90.0) * 80.0
+                        effectiveDist += penalty
+                    }
+                    
+                    if (effectiveDist < minEffectiveDistance) {
+                        minEffectiveDistance = effectiveDist
+                        closestWayLocal = way
+                    }
+                }
+            }
+        }
+        
+        val way = closestWayLocal
+        if (way != null && minEffectiveDistance < 50.0) {
+            val speedLimitVal = way.maxSpeed
+            if (speedLimitVal != null) {
+                return speedLimitVal
+            }
+            return when (way.highway) {
+                "motorway", "motorway_link" -> 140
+                "trunk", "trunk_link" -> 120
+                "primary", "primary_link" -> 90
+                "secondary", "secondary_link" -> 90
+                "tertiary", "tertiary_link" -> 90
+                "residential" -> 50
+                "living_street" -> 20
+                else -> 50
+            }
         }
         return null
     }

@@ -449,6 +449,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                     }
                 } else {
                     Log.e("MainActivity", "Overpass API error response code: ${conn.responseCode}")
+                    logErrorToFile("MainActivity", "Overpass API returned response code: ${conn.responseCode}")
                     runOnUiThread {
                         downloadProgress.value = null
                         isDownloadingCache = false
@@ -458,6 +459,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Failed to fetch map data online", e)
+                logErrorToFile("MainActivity", "Failed to fetch map data online", e)
                 runOnUiThread {
                     downloadProgress.value = null
                     isDownloadingCache = false
@@ -480,6 +482,7 @@ class MainActivity : ComponentActivity(), LocationListener {
             Log.d("MainActivity", "Saved map metadata: $root")
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to save map metadata", e)
+            logErrorToFile("MainActivity", "Failed to save map metadata", e)
         }
     }
 
@@ -508,9 +511,24 @@ class MainActivity : ComponentActivity(), LocationListener {
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to load cache metadata", e)
+            logErrorToFile("MainActivity", "Failed to load cache metadata", e)
         }
     }
 
+
+    private fun logErrorToFile(tag: String, message: String, throwable: Throwable? = null) {
+        Thread {
+            try {
+                val logFile = File(filesDir, "error_logs.txt")
+                val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                val stackTrace = throwable?.let { android.util.Log.getStackTraceString(it) } ?: ""
+                val entry = "[$timestamp] [$tag] $message\n$stackTrace\n"
+                logFile.appendText(entry)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to write log to file", e)
+            }
+        }.start()
+    }
 
     override fun onDestroy() {
         super.onDestroy()

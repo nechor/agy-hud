@@ -50,6 +50,7 @@ class MapMatchingEngine(private val baseDir: File) {
                 onComplete(true)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load GraphHopper", e)
+                logErrorToFile("Failed to load GraphHopper", e)
                 isInitialized = false
                 onComplete(false)
             }
@@ -86,6 +87,7 @@ class MapMatchingEngine(private val baseDir: File) {
                 onComplete(true)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to compile OSM XML data", e)
+                logErrorToFile("Failed to compile OSM XML data", e)
                 onComplete(false)
             }
         }.start()
@@ -123,6 +125,7 @@ class MapMatchingEngine(private val baseDir: File) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error matching speed limit at $latitude, $longitude", e)
+            logErrorToFile("Error matching speed limit at $latitude, $longitude", e)
         }
         return null
     }
@@ -151,6 +154,19 @@ class MapMatchingEngine(private val baseDir: File) {
             Log.i(TAG, "GraphHopper instance closed.")
         } catch (e: Exception) {
             Log.e(TAG, "Error closing GraphHopper", e)
+            logErrorToFile("Error closing GraphHopper", e)
+        }
+    }
+
+    private fun logErrorToFile(message: String, throwable: Throwable? = null) {
+        try {
+            val logFile = File(baseDir, "error_logs.txt")
+            val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            val stackTrace = throwable?.let { android.util.Log.getStackTraceString(it) } ?: ""
+            val entry = "[$timestamp] [MapMatchingEngine] $message\n$stackTrace\n"
+            logFile.appendText(entry)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write log to file", e)
         }
     }
 

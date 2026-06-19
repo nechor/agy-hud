@@ -4,7 +4,7 @@
             "outputFile": "com.offlinehud.app-mergeReleaseResources-38:/values-v21/values-v21.xml",
             "map": [
                 {
-                    "source": "/home/dariuszjakubowski/.gradle/caches/9.5.0/transforms/dabe072ace3b63a42bfa05dfb22d1012/transformed/core-1.13.1/res/values-v21/values-v21.xml",
+                    "source": "/home/chips/.gradle/caches/9.5.0/transforms/dabe072ace3b63a42bfa05dfb22d1012/transformed/core-1.13.1/res/values-v21/values-v21.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,13",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4",

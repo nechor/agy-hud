@@ -4,7 +4,7 @@
             "outputFile": "com.offlinehud.app-mergeReleaseResources-38:/values-lt/values-lt.xml",
             "map": [
                 {
-                    "source": "/home/dariuszjakubowski/.gradle/caches/9.5.0/transforms/e30ee4ab0accab2e2a604bbaddd6d50c/transformed/foundation-release/res/values-lt/values-lt.xml",
+                    "source": "/home/chips/.gradle/caches/9.5.0/transforms/e30ee4ab0accab2e2a604bbaddd6d50c/transformed/foundation-release/res/values-lt/values-lt.xml",
                     "from": {
                         "startLines": "2,3",
                         "startColumns": "4,4",
@@ -21,7 +21,7 @@
                     }
                 },
                 {
-                    "source": "/home/dariuszjakubowski/.gradle/caches/9.5.0/transforms/dabe072ace3b63a42bfa05dfb22d1012/transformed/core-1.13.1/res/values-lt/values-lt.xml",
+                    "source": "/home/chips/.gradle/caches/9.5.0/transforms/dabe072ace3b63a42bfa05dfb22d1012/transformed/core-1.13.1/res/values-lt/values-lt.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9",
                         "startColumns": "4,4,4,4,4,4,4,4",
@@ -38,7 +38,7 @@
                     }
                 },
                 {
-                    "source": "/home/dariuszjakubowski/.gradle/caches/9.5.0/transforms/80c8da9c000acfb5224a6e2b60fb0a20/transformed/ui-release/res/values-lt/values-lt.xml",
+                    "source": "/home/chips/.gradle/caches/9.5.0/transforms/80c8da9c000acfb5224a6e2b60fb0a20/transformed/ui-release/res/values-lt/values-lt.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",
@@ -55,7 +55,7 @@
                     }
                 },
                 {
-                    "source": "/home/dariuszjakubowski/.gradle/caches/9.5.0/transforms/a5824d6993308051ac3e6110e5a47aab/transformed/material3-release/res/values-lt/values-lt.xml",
+                    "source": "/home/chips/.gradle/caches/9.5.0/transforms/a5824d6993308051ac3e6110e5a47aab/transformed/material3-release/res/values-lt/values-lt.xml",
                     "from": {
                         "startLines": "2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57",
                         "startColumns": "4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4",

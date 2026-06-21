@@ -4,8 +4,12 @@ import android.content.Context
 import android.util.Log
 import com.graphhopper.GraphHopper
 import com.graphhopper.config.Profile
+import com.graphhopper.routing.WeightingFactory
+import com.graphhopper.routing.weighting.Weighting
 import com.graphhopper.routing.ev.DecimalEncodedValue
 import com.graphhopper.routing.ev.MaxSpeed
+import com.graphhopper.routing.ev.VehicleAccess
+import com.graphhopper.routing.ev.VehicleSpeed
 import com.graphhopper.storage.index.LocationIndex
 import com.graphhopper.storage.index.Snap
 import com.graphhopper.util.EdgeIteratorState
@@ -15,6 +19,11 @@ import java.io.File
 class MapMatchingEngine(private val baseDir: File) {
     companion object {
         private const val TAG = "MapMatchingEngine"
+        init {
+            System.setProperty("javax.xml.stream.XMLInputFactory", "com.fasterxml.aalto.stax.InputFactoryImpl")
+            System.setProperty("javax.xml.stream.XMLOutputFactory", "com.fasterxml.aalto.stax.OutputFactoryImpl")
+            System.setProperty("javax.xml.stream.XMLEventFactory", "com.fasterxml.aalto.stax.EventFactoryImpl")
+        }
     }
 
     private var hopper: GraphHopper? = null
@@ -35,10 +44,10 @@ class MapMatchingEngine(private val baseDir: File) {
 
         Thread {
             try {
-                val gh = GraphHopper().apply {
+                val gh = AndroidGraphHopper().apply {
                     osmFile = ""
                     graphHopperLocation = graphFolder.absolutePath
-                    profiles = listOf(Profile("car").setVehicle("car").setWeighting("fastest"))
+                    profiles = listOf(Profile("car").setVehicle("car").setWeighting("custom"))
                 }
                 
                 gh.importOrLoad()
@@ -72,10 +81,10 @@ class MapMatchingEngine(private val baseDir: File) {
                 }
                 graphFolder.mkdirs()
 
-                val gh = GraphHopper().apply {
+                val gh = AndroidGraphHopper().apply {
                     this.osmFile = osmFile.absolutePath
                     graphHopperLocation = graphFolder.absolutePath
-                    profiles = listOf(Profile("car").setVehicle("car").setWeighting("fastest"))
+                    profiles = listOf(Profile("car").setVehicle("car").setWeighting("custom"))
                 }
                 
                 gh.importOrLoad()
@@ -172,4 +181,52 @@ class MapMatchingEngine(private val baseDir: File) {
 
     fun isReady(): Boolean = isInitialized
     fun isMockMode(): Boolean = !isInitialized || hopper == null
+}
+
+class DirectWeighting(
+    private val accessEnc: com.graphhopper.routing.ev.BooleanEncodedValue,
+    private val speedEnc: DecimalEncodedValue
+) : Weighting {
+    override fun getMinWeight(distance: Double): Double {
+        return distance / 150.0
+    }
+
+    override fun calcEdgeWeight(edgeState: EdgeIteratorState, reverse: Boolean): Double {
+        val speed = edgeState.get(speedEnc)
+        if (speed <= 0.0) return Double.POSITIVE_INFINITY
+        return edgeState.distance / (speed / 3.6)
+    }
+
+    override fun calcEdgeMillis(edgeState: EdgeIteratorState, reverse: Boolean): Long {
+        val speed = edgeState.get(speedEnc)
+        if (speed <= 0.0) return Long.MAX_VALUE
+        return (edgeState.distance / (speed / 3.6) * 1000.0).toLong()
+    }
+
+    override fun calcTurnWeight(inEdge: Int, viaNode: Int, outEdge: Int): Double {
+        return 0.0
+    }
+
+    override fun calcTurnMillis(inEdge: Int, viaNode: Int, outEdge: Int): Long {
+        return 0L
+    }
+
+    override fun getName(): String {
+        return "custom"
+    }
+
+    override fun hasTurnCosts(): Boolean {
+        return false
+    }
+}
+
+class AndroidGraphHopper : GraphHopper() {
+    override fun createWeightingFactory(): WeightingFactory {
+        return WeightingFactory { profile, _, _ ->
+            val vehicle = profile.vehicle
+            val accessEnc = encodingManager.getBooleanEncodedValue(VehicleAccess.key(vehicle))
+            val speedEnc = encodingManager.getDecimalEncodedValue(VehicleSpeed.key(vehicle))
+            DirectWeighting(accessEnc, speedEnc)
+        }
+    }
 }

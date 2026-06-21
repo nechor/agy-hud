@@ -48,4 +48,43 @@ class MapMatchingEngineTest {
         val limit = engine.getSpeedLimit(52.2297, 21.0122)
         assertNull("Speed limit should be null when engine is not initialized", limit)
     }
+
+    @Test
+    fun testImportAndQuerySpeedLimit() {
+        // Create a simple valid OSM XML content
+        val osmContent = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <osm version="0.6" generator="Mock Source">
+              <node id="1" lat="52.2297" lon="21.0122"/>
+              <node id="2" lat="52.2300" lon="21.0130"/>
+              <way id="3">
+                <nd ref="1"/>
+                <nd ref="2"/>
+                <tag k="highway" v="residential"/>
+                <tag k="maxspeed" v="50"/>
+              </way>
+            </osm>
+        """.trimIndent()
+        
+        val osmFile = tempFolder.newFile("test_map.osm")
+        osmFile.writeText(osmContent)
+        
+        val latch = CountDownLatch(1)
+        var importSuccess = false
+        
+        engine.importOsmFile(osmFile) { success ->
+            importSuccess = success
+            latch.countDown()
+        }
+        
+        val completed = latch.await(10, TimeUnit.SECONDS)
+        org.junit.Assert.assertTrue("Import should finish within 10 seconds", completed)
+        org.junit.Assert.assertTrue("OSM XML compilation/import should be successful", importSuccess)
+        org.junit.Assert.assertTrue("Engine should be ready/initialized", engine.isReady())
+        
+        // Query near the road way
+        val speedLimit = engine.getSpeedLimit(52.2298, 21.0125)
+        org.junit.Assert.assertNotNull("Speed limit should not be null near the roadway", speedLimit)
+        org.junit.Assert.assertEquals(50.0, speedLimit!!, 0.1)
+    }
 }

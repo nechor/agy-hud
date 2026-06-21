@@ -56,6 +56,9 @@ android {
             excludes += "/META-INF/NOTICE"
             excludes += "/META-INF/NOTICE.txt"
             excludes += "/META-INF/notice.txt"
+            excludes += "/META-INF/services/javax.xml.stream.XMLInputFactory"
+            excludes += "/META-INF/services/javax.xml.stream.XMLOutputFactory"
+            excludes += "/META-INF/services/javax.xml.stream.XMLEventFactory"
         }
     }
 }
@@ -72,6 +75,10 @@ dependencies {
     
     // GraphHopper for offline Map Matching
     implementation(libs.graphhopper.core)
+    
+    // StAX API and implementation for Android compatibility
+    implementation("javax.xml.stream:stax-api:1.0-2")
+    implementation("com.fasterxml:aalto-xml:1.3.2")
 
     testImplementation(libs.junit)
     testImplementation(libs.mockito.core)

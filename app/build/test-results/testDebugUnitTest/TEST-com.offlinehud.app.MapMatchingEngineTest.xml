@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.offlinehud.app.MapMatchingEngineTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-06-19T17:31:17.464Z" hostname="chips-ubuntu" time="0.016">
+<testsuite name="com.offlinehud.app.MapMatchingEngineTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-06-19T19:55:02.127Z" hostname="chips-ubuntu" time="1.315">
   <properties/>
-  <testcase name="testGetSpeedLimitWhenNotInitialized" classname="com.offlinehud.app.MapMatchingEngineTest" time="0.006"/>
-  <testcase name="testInitializationWithMissingDirectory" classname="com.offlinehud.app.MapMatchingEngineTest" time="0.007"/>
+  <testcase name="testGetSpeedLimitWhenNotInitialized" classname="com.offlinehud.app.MapMatchingEngineTest" time="0.013"/>
+  <testcase name="testInitializationWithMissingDirectory" classname="com.offlinehud.app.MapMatchingEngineTest" time="0.016"/>
+  <testcase name="testImportAndQuerySpeedLimit" classname="com.offlinehud.app.MapMatchingEngineTest" time="1.282"/>
   <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
+  <system-err><![CDATA[SLF4J: Failed to load class "org.slf4j.impl.StaticLoggerBinder".
+SLF4J: Defaulting to no-operation (NOP) logger implementation
+SLF4J: See http://www.slf4j.org/codes.html#StaticLoggerBinder for further details.
+]]></system-err>
 </testsuite>

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.offlinehud.app.SrtmElevationProviderTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-06-19T17:31:17.483Z" hostname="chips-ubuntu" time="0.037">
+<testsuite name="com.offlinehud.app.SrtmElevationProviderTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-06-19T19:55:03.447Z" hostname="chips-ubuntu" time="0.04">
   <properties/>
-  <testcase name="testGetElevationWithMissingFile" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.01"/>
-  <testcase name="testGetElevationWithVoidData" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.011"/>
-  <testcase name="testGetElevationCache" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.008"/>
-  <testcase name="testGetElevationWithValidFile" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.006"/>
+  <testcase name="testGetElevationWithMissingFile" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.014"/>
+  <testcase name="testGetElevationWithVoidData" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.008"/>
+  <testcase name="testGetElevationCache" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.009"/>
+  <testcase name="testGetElevationWithValidFile" classname="com.offlinehud.app.SrtmElevationProviderTest" time="0.007"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>

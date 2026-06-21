@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.offlinehud.app.MapMatchingEngineTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-06-19T17:31:18.193Z" hostname="chips-ubuntu" time="0.02">
-  <properties/>
-  <testcase name="testGetSpeedLimitWhenNotInitialized" classname="com.offlinehud.app.MapMatchingEngineTest" time="0.006"/>
-  <testcase name="testInitializationWithMissingDirectory" classname="com.offlinehud.app.MapMatchingEngineTest" time="0.011"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

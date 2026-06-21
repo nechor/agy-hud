@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity(), LocationListener {
     private val isSymmetricMirror = mutableStateOf(false)
     private val gpsStatus = mutableStateOf("No GPS Fix")
     private val mapStatus = mutableStateOf("Offline Map: Not Loaded")
+    private val limitStatus = mutableStateOf("No Map")
     private val downloadProgress = mutableStateOf<Float?>(null)
 
     // History logs for step charts
@@ -165,6 +166,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                     isMirror = isSymmetricMirror.value,
                     gpsStatus = gpsStatus.value,
                     mapStatus = mapStatus.value,
+                    limitStatus = limitStatus.value,
                     speedHistory = speedHistory,
                     speedColorHistory = speedColorHistory,
                     elevationHistory = elevationHistory,
@@ -281,9 +283,13 @@ class MainActivity : ComponentActivity(), LocationListener {
                 runOnUiThread {
                     cacheFetchCount.value += 1
                 }
+                limitStatus.value = "OK"
                 recordFetchResult(2) // local success -> yellow
                 localLimit
             } else {
+                val reason = mapMatchingEngine.getQueryFailureReason(lat, lon)
+                limitStatus.value = reason
+                
                 // Auto-trigger background download if we have no map and it's not pre-compiled
                 if (cacheCenterLat != -1.0) {
                     val distFromCenter = calculateDistanceMeters(lat, lon, cacheCenterLat, cacheCenterLon)
@@ -641,6 +647,7 @@ fun HudScreen(
     isMirror: Boolean,
     gpsStatus: String,
     mapStatus: String,
+    limitStatus: String,
     speedHistory: List<Float>,
     speedColorHistory: List<Color>,
     elevationHistory: List<Float>,
@@ -866,7 +873,11 @@ fun HudScreen(
                                 letterSpacing = 1.sp
                             )
                             Text(
-                                text = if (overspeed) "EXCEEDED" else "LOGGED",
+                                text = if (speedLimit != null) {
+                                    if (overspeed) "EXCEEDED" else "LOGGED"
+                                } else {
+                                    limitStatus.uppercase()
+                                },
                                 color = if (overspeed) Color(0xFFFF0055) else Color.Gray,
                                 fontSize = 8.sp,
                                 fontFamily = FontFamily.Monospace

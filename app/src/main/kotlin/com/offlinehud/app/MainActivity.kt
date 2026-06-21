@@ -44,6 +44,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import android.util.Log
 import java.io.File
+import java.io.FileOutputStream
+import java.io.FileInputStream
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipEntry
+import java.io.IOException
 import kotlin.math.roundToInt
 import kotlin.math.floor
 import kotlin.math.abs
@@ -145,6 +152,8 @@ class MainActivity : ComponentActivity(), LocationListener {
         }
 
         checkAndRequestPermissions()
+
+
 
         setContent {
             MaterialTheme {
@@ -275,12 +284,16 @@ class MainActivity : ComponentActivity(), LocationListener {
                 recordFetchResult(2) // local success -> yellow
                 localLimit
             } else {
-                // Auto-trigger background download if we have no map or moved too far from compiled center (> 10km)
-                val distFromCenter = calculateDistanceMeters(lat, lon, cacheCenterLat, cacheCenterLon)
-                if (cacheCenterLat == 0.0 || distFromCenter > 10000.0) {
-                    downloadOfflineDataAtLocation(lat, lon)
+                // Auto-trigger background download if we have no map and it's not pre-compiled
+                if (cacheCenterLat != -1.0) {
+                    val distFromCenter = calculateDistanceMeters(lat, lon, cacheCenterLat, cacheCenterLon)
+                    if (cacheCenterLat == 0.0 || distFromCenter > 3500.0) {
+                        downloadOfflineDataAtLocation(lat, lon)
+                    } else {
+                        recordFetchResult(0) // within range but couldn't match to a road -> red
+                    }
                 } else {
-                    recordFetchResult(0) // within range but couldn't match to a road -> red
+                    recordFetchResult(0) // off-road or not in precompiled graph -> red
                 }
                 null
             }
@@ -390,6 +403,13 @@ class MainActivity : ComponentActivity(), LocationListener {
         downloadOfflineDataAtLocation(lat, lon)
     }
 
+    private val overpassMirrors = listOf(
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://z.overpass-api.de/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter"
+    )
+
     private fun downloadOfflineDataAtLocation(lat: Double, lon: Double) {
         if (isDownloadingCache) return
         isDownloadingCache = true
@@ -400,74 +420,141 @@ class MainActivity : ComponentActivity(), LocationListener {
         
         Thread {
             try {
-                Log.d("MainActivity", "Downloading 15km GraphHopper OSM XML around $lat, $lon")
                 runOnUiThread {
                     mapStatus.value = "Downloading Map..."
                 }
                 
-                val query = "[out:xml][timeout:60];way(around:15000.0,$lat,$lon)[highway~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)(_link)?$\"];(._;>;);out;"
-                val url = java.net.URL("https://overpass-api.de/api/interpreter?data=" + java.net.URLEncoder.encode(query, "UTF-8"))
+                val url = java.net.URL("https://github.com/nechor/agy-hud/releases/latest/download/graphhopper.zip")
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
                 conn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
-                conn.connectTimeout = 30000
+                conn.connectTimeout = 15000
                 conn.readTimeout = 30000
                 
-                if (conn.responseCode == 200) {
+                var status = conn.responseCode
+                var downloadUrl = url
+                var finalConn = conn
+                if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP || 
+                    status == java.net.HttpURLConnection.HTTP_MOVED_PERM || 
+                    status == 307 || status == 308) {
+                    val newUrl = conn.getHeaderField("Location")
+                    downloadUrl = java.net.URL(newUrl)
+                    finalConn = downloadUrl.openConnection() as java.net.HttpURLConnection
+                    finalConn.requestMethod = "GET"
+                    finalConn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
+                    finalConn.connectTimeout = 15000
+                    finalConn.readTimeout = 30000
+                    status = finalConn.responseCode
+                }
+
+                if (status == 200) {
+                    val contentLength = finalConn.contentLength
+                    val zipFile = File(filesDir, "graphhopper.zip")
+                    
                     runOnUiThread {
-                        downloadProgress.value = 0.5f
-                        mapStatus.value = "Saving Map File..."
+                        downloadProgress.value = 0.3f
+                        mapStatus.value = "Saving ZIP..."
                     }
-                    val mapFile = File(filesDir, "map.osm")
-                    conn.inputStream.use { input ->
-                        mapFile.outputStream().use { output ->
-                            input.copyTo(output)
+                    
+                    finalConn.inputStream.use { input ->
+                        zipFile.outputStream().use { output ->
+                            val buffer = ByteArray(8192)
+                            var bytesRead: Int
+                            var totalBytesRead = 0L
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                totalBytesRead += bytesRead
+                                if (contentLength > 0) {
+                                    val progress = 0.3f + 0.5f * (totalBytesRead.toFloat() / contentLength)
+                                    runOnUiThread {
+                                        downloadProgress.value = progress
+                                    }
+                                }
+                            }
                         }
                     }
                     
                     runOnUiThread {
                         downloadProgress.value = 0.8f
-                        mapStatus.value = "Compiling Graph..."
+                        mapStatus.value = "Unzipping Map..."
                     }
                     
-                    mapMatchingEngine.importOsmFile(mapFile) { success ->
+                    val graphFolder = File(filesDir, "graphhopper")
+                    if (graphFolder.exists()) {
+                        graphFolder.deleteRecursively()
+                    }
+                    graphFolder.mkdirs()
+                    
+                    unzip(zipFile, filesDir)
+                    
+                    if (zipFile.exists()) {
+                        zipFile.delete()
+                    }
+                    
+                    runOnUiThread {
+                        downloadProgress.value = 0.9f
+                        mapStatus.value = "Loading Map..."
+                    }
+                    
+                    mapMatchingEngine.initialize { success ->
                         runOnUiThread {
                             downloadProgress.value = null
                             isDownloadingCache = false
                             if (success) {
-                                cacheCenterLat = lat
-                                cacheCenterLon = lon
+                                cacheCenterLat = -1.0
+                                cacheCenterLon = -1.0
                                 cacheTimestamp = System.currentTimeMillis()
                                 saveCacheToFile()
                                 mapStatus.value = "Offline Map: Ready"
-                                recordFetchResult(1) // api success -> green
+                                recordFetchResult(1)
                             } else {
-                                mapStatus.value = "Compilation Failed"
-                                recordFetchResult(0) // fail -> red
+                                mapStatus.value = "Load Failed"
+                                recordFetchResult(0)
                             }
                         }
                     }
                 } else {
-                    Log.e("MainActivity", "Overpass API error response code: ${conn.responseCode}")
-                    logErrorToFile("MainActivity", "Overpass API returned response code: ${conn.responseCode}")
+                    Log.e("MainActivity", "GitHub download returned error code: $status")
+                    logErrorToFile("MainActivity", "GitHub download returned error code: $status")
                     runOnUiThread {
                         downloadProgress.value = null
                         isDownloadingCache = false
-                        mapStatus.value = "Download Failed (${conn.responseCode})"
+                        mapStatus.value = "Download Failed (HTTP $status)"
                         recordFetchResult(0)
                     }
                 }
             } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to fetch map data online", e)
-                logErrorToFile("MainActivity", "Failed to fetch map data online", e)
+                Log.e("MainActivity", "Failed to download precompiled map data", e)
+                logErrorToFile("MainActivity", "Failed to download precompiled map data", e)
                 runOnUiThread {
                     downloadProgress.value = null
                     isDownloadingCache = false
-                    mapStatus.value = "Download Failed"
+                    mapStatus.value = "Download Error"
                     recordFetchResult(0)
                 }
             }
         }.start()
+    }
+
+    private fun unzip(zipFile: File, targetDirectory: File) {
+        ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
+            var entry: ZipEntry?
+            while (zis.nextEntry.also { entry = it } != null) {
+                val file = File(targetDirectory, entry!!.name)
+                val dir = if (entry!!.isDirectory) file else file.parentFile
+                if (!dir.isDirectory && !dir.mkdirs()) {
+                    throw IOException("Failed to ensure directory: ${dir.absolutePath}")
+                }
+                if (entry!!.isDirectory) continue
+                BufferedOutputStream(FileOutputStream(file)).use { dest ->
+                    val buffer = ByteArray(8192)
+                    var count: Int
+                    while (zis.read(buffer).also { count = it } != -1) {
+                        dest.write(buffer, 0, count)
+                    }
+                }
+            }
+        }
     }
 
     private fun saveCacheToFile() {
@@ -477,6 +564,9 @@ class MainActivity : ComponentActivity(), LocationListener {
                 put("centerLat", cacheCenterLat)
                 put("centerLon", cacheCenterLon)
                 put("timestamp", cacheTimestamp)
+                if (cacheCenterLat == -1.0) {
+                    put("precompiled", true)
+                }
             }
             file.writeText(root.toString())
             Log.d("MainActivity", "Saved map metadata: $root")
@@ -495,8 +585,9 @@ class MainActivity : ComponentActivity(), LocationListener {
                 val timestamp = root.optLong("timestamp", 0L)
                 val now = System.currentTimeMillis()
                 val oneDayMs = 24 * 60 * 60 * 1000L
+                val precompiled = root.optBoolean("precompiled", false) || root.optDouble("centerLat", 0.0) == -1.0
                 
-                if (now - timestamp < oneDayMs) {
+                if (precompiled || (now - timestamp < oneDayMs)) {
                     cacheCenterLat = root.optDouble("centerLat", 0.0)
                     cacheCenterLon = root.optDouble("centerLon", 0.0)
                     cacheTimestamp = timestamp

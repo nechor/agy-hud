@@ -1,0 +1,10 @@
+.gradle/
+build/
+app/build/
+map-compiler/build/
+scratch/
+*.png
+.venv/
+.idea/
+*.iml
+.DS_Store

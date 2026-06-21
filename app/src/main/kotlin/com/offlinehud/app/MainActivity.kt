@@ -39,6 +39,9 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -77,6 +80,9 @@ class MainActivity : ComponentActivity(), LocationListener {
     private val gpsStatus = mutableStateOf("No GPS Fix")
     private val mapStatus = mutableStateOf("Offline Map: Not Loaded")
     private val limitStatus = mutableStateOf("No Map")
+    private val roadClass = mutableStateOf("")
+    private val isUrbanArea = mutableStateOf(false)
+    private val currentFetchStatus = mutableStateOf(0)
     private val downloadProgress = mutableStateOf<Float?>(null)
 
     // History logs for step charts
@@ -109,8 +115,12 @@ class MainActivity : ComponentActivity(), LocationListener {
     // Speed limit query status history (last 10 attempts)
     val fetchHistory = mutableStateListOf<FetchResult>()
     private var fetchIdSequence = 0L
-    val apiFetchCount = mutableStateOf(0)
-    val cacheFetchCount = mutableStateOf(0)
+    val okFetchCount = mutableStateOf(0)
+    val deducedFetchCount = mutableStateOf(0)
+    val offRoadFetchCount = mutableStateOf(0)
+    val noLimitFetchCount = mutableStateOf(0)
+    val noRoadsFetchCount = mutableStateOf(0)
+    val noMapFetchCount = mutableStateOf(0)
 
     // Compiled map metadata
     private var cacheCenterLat = 0.0
@@ -121,8 +131,16 @@ class MainActivity : ComponentActivity(), LocationListener {
     private fun recordFetchResult(status: Int) { // 0 = fail, 1 = api_success, 2 = cache_success
         runOnUiThread {
             fetchHistory.add(FetchResult(fetchIdSequence++, status))
-            if (fetchHistory.size > 10) {
+            if (fetchHistory.size > 20) {
                 fetchHistory.removeAt(0)
+            }
+            when (status) {
+                1, 2 -> okFetchCount.value += 1
+                6 -> deducedFetchCount.value += 1
+                3 -> offRoadFetchCount.value += 1
+                4 -> noLimitFetchCount.value += 1
+                5 -> noRoadsFetchCount.value += 1
+                else -> noMapFetchCount.value += 1
             }
         }
     }
@@ -175,13 +193,20 @@ class MainActivity : ComponentActivity(), LocationListener {
                     gpsStatus = gpsStatus.value,
                     mapStatus = mapStatus.value,
                     limitStatus = limitStatus.value,
+                    roadClass = roadClass.value,
+                    isUrbanArea = isUrbanArea.value,
+                    currentFetchStatus = currentFetchStatus.value,
                     speedHistory = speedHistory,
                     speedColorHistory = speedColorHistory,
                     elevationHistory = elevationHistory,
                     downloadProgress = downloadProgress.value,
                     fetchHistory = fetchHistory,
-                    apiFetchCount = apiFetchCount.value,
-                    cacheFetchCount = cacheFetchCount.value,
+                    okFetchCount = okFetchCount.value,
+                    deducedFetchCount = deducedFetchCount.value,
+                    offRoadFetchCount = offRoadFetchCount.value,
+                    noLimitFetchCount = noLimitFetchCount.value,
+                    noRoadsFetchCount = noRoadsFetchCount.value,
+                    noMapFetchCount = noMapFetchCount.value,
                     onToggleMirror = { isSymmetricMirror.value = !isSymmetricMirror.value },
                     onDownloadData = { downloadOfflineData() }
                 )
@@ -286,28 +311,41 @@ class MainActivity : ComponentActivity(), LocationListener {
             lastQueryLat = lat
             lastQueryLon = lon
 
-            val localLimit = mapMatchingEngine.getSpeedLimit(lat, lon)?.roundToInt()
-            if (localLimit != null) {
-                runOnUiThread {
-                    cacheFetchCount.value += 1
+            val match = mapMatchingEngine.getSpeedLimit(lat, lon)
+            val localLimit = match?.limit?.roundToInt()
+            if (match != null && localLimit != null) {
+                limitStatus.value = if (match.roadName.isNotEmpty()) {
+                    match.roadName
+                } else {
+                    match.roadClass
                 }
-                limitStatus.value = "OK"
-                recordFetchResult(2) // local success -> yellow
+                roadClass.value = match.roadClass
+                isUrbanArea.value = match.isUrban
+                currentFetchStatus.value = match.status
+                recordFetchResult(match.status)
                 localLimit
             } else {
                 val reason = mapMatchingEngine.getQueryFailureReason(lat, lon)
                 limitStatus.value = reason
+                roadClass.value = ""
+                isUrbanArea.value = false
+                
+                val statusInt = when {
+                    reason.contains("No Map", ignoreCase = true) -> 0 // Gray
+                    reason.contains("No Roads", ignoreCase = true) -> 5 // Blue
+                    reason.contains("Off-road", ignoreCase = true) -> 3 // Light Red
+                    reason.contains("No Limit", ignoreCase = true) -> 4 // Purple
+                    else -> 0
+                }
+                currentFetchStatus.value = statusInt
+                recordFetchResult(statusInt)
                 
                 // Auto-trigger background download if we have no map and it's not pre-compiled
                 if (cacheCenterLat != -1.0) {
                     val distFromCenter = calculateDistanceMeters(lat, lon, cacheCenterLat, cacheCenterLon)
                     if (cacheCenterLat == 0.0 || distFromCenter > 3500.0) {
                         downloadOfflineDataAtLocation(lat, lon)
-                    } else {
-                        recordFetchResult(0) // within range but couldn't match to a road -> red
                     }
-                } else {
-                    recordFetchResult(0) // off-road or not in precompiled graph -> red
                 }
                 null
             }
@@ -429,7 +467,6 @@ class MainActivity : ComponentActivity(), LocationListener {
         isDownloadingCache = true
         runOnUiThread {
             downloadProgress.value = 0.1f
-            apiFetchCount.value += 1
         }
         
         Thread {
@@ -656,13 +693,20 @@ fun HudScreen(
     gpsStatus: String,
     mapStatus: String,
     limitStatus: String,
+    roadClass: String,
+    isUrbanArea: Boolean,
+    currentFetchStatus: Int,
     speedHistory: List<Float>,
     speedColorHistory: List<Color>,
     elevationHistory: List<Float>,
     downloadProgress: Float?,
     fetchHistory: List<FetchResult>,
-    apiFetchCount: Int,
-    cacheFetchCount: Int,
+    okFetchCount: Int,
+    deducedFetchCount: Int,
+    offRoadFetchCount: Int,
+    noLimitFetchCount: Int,
+    noRoadsFetchCount: Int,
+    noMapFetchCount: Int,
     onToggleMirror: () -> Unit,
     onDownloadData: () -> Unit
 ) {
@@ -703,6 +747,47 @@ fun HudScreen(
         ),
         label = "pulsingAlpha"
     )
+    val showStatusLegend = remember { mutableStateOf(false) }
+
+    if (showStatusLegend.value) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showStatusLegend.value = false },
+            title = {
+                Text(
+                    text = "STATUS LEGEND",
+                    color = Color(0xFF00F0FF),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    LegendItem(Color(0xFF00FF88), "GREEN (OK)", "OK - Limit read from maxspeed tag on map")
+                    LegendItem(Color(0xFFFFB74D), "YELLOW (DED)", "OK - Limit deduced from road class (e.g. 90 km/h rural, 50 km/h urban)")
+                    LegendItem(Color(0xFFFF5252), "LIGHT RED (OFF)", "Off-road (distance to nearest road > 50 meters)")
+                    LegendItem(Color(0xFFE040FB), "PURPLE (TAG)", "No Speed Limit Tag & unrecognized road (defaulted to 50 km/h)")
+                    LegendItem(Color(0xFF448AFF), "BLUE (RD)", "No Roads Found (empty region or pedestrian-only zone)")
+                    LegendItem(Color(0xFF90A4AE), "GRAY (MAP)", "No Map Loaded (download offline map or compile OSM)")
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { showStatusLegend.value = false }
+                ) {
+                    Text(
+                        "DISMISS",
+                        color = Color(0xFF00F0FF),
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            },
+            containerColor = Color(0xFF0F172A),
+            textContentColor = Color.White
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -790,15 +875,47 @@ fun HudScreen(
                                 )
                             }
                         }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             FetchHistoryBars(fetchHistory = fetchHistory)
                             Text(
-                                text = "API: $apiFetchCount  CACHE: $cacheFetchCount",
-                                color = Color(0xFF00F0FF),
-                                fontSize = 9.sp,
+                                text = buildAnnotatedString {
+                                    withStyle(style = SpanStyle(color = Color(0xFF00FF88))) {
+                                        append("OK:$okFetchCount")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF94A3B8))) {
+                                        append(" | ")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFFFFB74D))) {
+                                        append("DED:$deducedFetchCount")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF94A3B8))) {
+                                        append(" | ")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFFFF5252))) {
+                                        append("OFF:$offRoadFetchCount")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF94A3B8))) {
+                                        append(" | ")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFFE040FB))) {
+                                        append("TAG:$noLimitFetchCount")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF94A3B8))) {
+                                        append(" | ")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF448AFF))) {
+                                        append("RD:$noRoadsFetchCount")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF94A3B8))) {
+                                        append(" | ")
+                                    }
+                                    withStyle(style = SpanStyle(color = Color(0xFF90A4AE))) {
+                                        append("MAP:$noMapFetchCount")
+                                    }
+                                },
+                                fontSize = 8.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold
                             )
@@ -823,7 +940,20 @@ fun HudScreen(
                     SpeedometerGauge(
                         speed = speed,
                         speedColor = speedColor,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 48.dp)
+                    )
+                    Text(
+                        text = limitStatus.uppercase(),
+                        color = Color(0xFF64B5F6),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 0.dp)
                     )
                 }
             }
@@ -869,38 +999,38 @@ fun HudScreen(
                     // Right side: Speed limit
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.clickable { showStatusLegend.value = true }
                     ) {
                         Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                "LIMIT SPEED",
-                                color = Color(0xFF64B5F6),
-                                fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
+                            UrbanAreaHouseIcon(
+                                isUrban = isUrbanArea && speedLimit != null,
+                                modifier = Modifier.padding(bottom = 4.dp)
                             )
                             Text(
-                                text = if (speedLimit != null) {
-                                    if (overspeed) "EXCEEDED" else "LOGGED"
+                                text = (if (speedLimit != null) {
+                                    roadClass
                                 } else {
-                                    limitStatus.uppercase()
-                                },
+                                    limitStatus
+                                }).uppercase(),
                                 color = if (overspeed) Color(0xFFFF0055) else Color.Gray,
                                 fontSize = 8.sp,
                                 fontFamily = FontFamily.Monospace
                             )
-                            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = mapStatus,
-                                color = Color(0xFF00F0FF).copy(alpha = 0.8f),
-                                fontSize = 7.sp,
-                                fontFamily = FontFamily.Monospace,
-                                textAlign = TextAlign.End
-                            )
+                            if (speedLimit == null) {
+                                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = mapStatus.uppercase(),
+                                    color = Color(0xFF00F0FF).copy(alpha = 0.8f),
+                                    fontSize = 7.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    textAlign = TextAlign.End
+                                )
+                            }
                         }
                         HolographicSpeedLimit(
                             limit = speedLimit,
+                            currentFetchStatus = currentFetchStatus,
                             modifier = Modifier.size(80.dp)
                         )
                     }
@@ -1004,8 +1134,8 @@ fun SpeedometerGauge(
             val paddingY = 20.dp.toPx()
             
             val a = (size.width - 2 * paddingX) / 2
-            val b = (size.height - 2 * paddingY) / 2
-            val shiftY = 34.dp.toPx()
+            val b = (size.height - 2 * paddingY) / 2 + 28.dp.toPx()
+            val shiftY = 12.dp.toPx()
             val center = Offset(paddingX + a, paddingY + b + shiftY)
             val arcSize = androidx.compose.ui.geometry.Size(a * 2, b * 2)
             val topLeft = Offset(paddingX, paddingY + shiftY)
@@ -1026,6 +1156,24 @@ fun SpeedometerGauge(
             val fillPercentage = (animatedSpeed / maxSpeedScale).coerceIn(0f, 1f)
             val activeSweep = fillPercentage * 240f
             
+             // Outer glow effect backdrop
+             drawArc(
+                 brush = Brush.sweepGradient(
+                     colors = listOf(
+                         speedColor.copy(alpha = 0.05f),
+                         speedColor.copy(alpha = 0.25f),
+                         speedColor.copy(alpha = 0.25f)
+                     ),
+                     center = center
+                 ),
+                 startAngle = 150f,
+                 sweepAngle = activeSweep,
+                 useCenter = false,
+                 topLeft = topLeft,
+                 size = arcSize,
+                 style = Stroke(width = 18.dp.toPx(), cap = StrokeCap.Round)
+             )
+
              // Active neon gauge ellipse arc
              drawArc(
                  brush = Brush.sweepGradient(
@@ -1116,6 +1264,7 @@ fun SpeedometerGauge(
 @Composable
 fun HolographicSpeedLimit(
     limit: Int?,
+    currentFetchStatus: Int,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1136,6 +1285,15 @@ fun HolographicSpeedLimit(
         label = "rotation"
     )
 
+    val statusColor = when (currentFetchStatus) {
+        1, 2 -> Color(0xFF00FF88) // Green (Map)
+        6 -> Color(0xFFFFB74D) // Yellow (Deduced)
+        3 -> Color(0xFFFF5252) // Light Red (Off-road)
+        4 -> Color(0xFFE040FB) // Purple (No Tag)
+        5 -> Color(0xFF448AFF) // Blue (No Roads)
+        else -> Color(0xFF90A4AE) // Gray (No Map / Unknown)
+    }
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
@@ -1145,7 +1303,7 @@ fun HolographicSpeedLimit(
             val radius = (size.width.coerceAtMost(size.height) / 2) - 6.dp.toPx()
 
             drawCircle(
-                color = Color(0xFF00F0FF).copy(alpha = 0.1f),
+                color = statusColor.copy(alpha = 0.1f),
                 radius = radius,
                 style = Stroke(width = 1.dp.toPx())
             )
@@ -1163,25 +1321,25 @@ fun HolographicSpeedLimit(
                 )
 
                 val tickCount = 12
-                for (i in 0 until tickCount) {
-                    val angleDeg = rotationAngle + (i * (360f / tickCount))
-                    val angleRad = Math.toRadians(angleDeg.toDouble())
-                    val tickLen = 5.dp.toPx()
-                    val startX = center.x + (radius + 2.dp.toPx()) * Math.cos(angleRad).toFloat()
-                    val startY = center.y + (radius + 2.dp.toPx()) * Math.sin(angleRad).toFloat()
-                    val endX = center.x + (radius + 2.dp.toPx() + tickLen) * Math.cos(angleRad).toFloat()
-                    val endY = center.y + (radius + 2.dp.toPx() + tickLen) * Math.sin(angleRad).toFloat()
+                 for (i in 0 until tickCount) {
+                     val angleDeg = rotationAngle + (i * (360f / tickCount))
+                     val angleRad = Math.toRadians(angleDeg.toDouble())
+                     val tickLen = 5.dp.toPx()
+                     val startX = center.x + (radius + 2.dp.toPx()) * Math.cos(angleRad).toFloat()
+                     val startY = center.y + (radius + 2.dp.toPx()) * Math.sin(angleRad).toFloat()
+                     val endX = center.x + (radius + 2.dp.toPx() + tickLen) * Math.cos(angleRad).toFloat()
+                     val endY = center.y + (radius + 2.dp.toPx() + tickLen) * Math.sin(angleRad).toFloat()
 
-                    drawLine(
-                        color = Color(0xFFFF0055).copy(alpha = 0.7f),
-                        start = Offset(startX, startY),
-                        end = Offset(endX, endY),
-                        strokeWidth = 1.5.dp.toPx()
-                    )
-                }
+                     drawLine(
+                         color = statusColor.copy(alpha = 0.8f),
+                         start = Offset(startX, startY),
+                         end = Offset(endX, endY),
+                         strokeWidth = 1.5.dp.toPx()
+                     )
+                 }
             } else {
                 drawCircle(
-                    color = Color(0xFF00F0FF).copy(alpha = 0.2f),
+                    color = statusColor.copy(alpha = 0.2f),
                     radius = radius - 4.dp.toPx(),
                     style = Stroke(width = 1.dp.toPx())
                 )
@@ -1197,10 +1355,10 @@ fun HolographicSpeedLimit(
                     val endY = center.y + (radius - 4.dp.toPx() - tickLen) * Math.sin(angleRad).toFloat()
 
                     drawLine(
-                        color = Color(0xFF00F0FF).copy(alpha = 0.5f),
+                        color = statusColor.copy(alpha = 0.6f),
                         start = Offset(startX, startY),
                         end = Offset(endX, endY),
-                        strokeWidth = 1.dp.toPx()
+                        strokeWidth = 1.2.dp.toPx()
                     )
                 }
             }
@@ -1220,7 +1378,69 @@ fun HolographicSpeedLimit(
                 modifier = Modifier
                     .size(6.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF00F0FF))
+                    .background(statusColor)
+            )
+        }
+    }
+}
+
+@Composable
+fun UrbanAreaHouseIcon(
+    isUrban: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val color = if (isUrban) Color(0xFF00FF88) else Color(0xFF334155)
+    val glowColor = if (isUrban) Color(0xFF00FF88).copy(alpha = 0.4f) else Color.Transparent
+    
+    Box(
+        modifier = modifier.size(18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            
+            val roofPath = Path().apply {
+                moveTo(w / 2f, h * 0.08f)
+                lineTo(w * 0.08f, h * 0.45f)
+                lineTo(w * 0.92f, h * 0.45f)
+                close()
+            }
+            
+            val bodyLeft = w * 0.18f
+            val bodyTop = h * 0.45f
+            val bodyWidth = w * 0.64f
+            val bodyHeight = h * 0.45f
+            
+            if (isUrban) {
+                drawPath(
+                    path = roofPath,
+                    color = glowColor,
+                    style = Stroke(width = 2.5.dp.toPx())
+                )
+                drawRect(
+                    color = glowColor,
+                    topLeft = Offset(bodyLeft, bodyTop),
+                    size = androidx.compose.ui.geometry.Size(bodyWidth, bodyHeight),
+                    style = Stroke(width = 2.5.dp.toPx())
+                )
+            }
+            
+            drawPath(
+                path = roofPath,
+                color = color
+            )
+            
+            drawRect(
+                color = color,
+                topLeft = Offset(bodyLeft, bodyTop),
+                size = androidx.compose.ui.geometry.Size(bodyWidth, bodyHeight)
+            )
+            
+            drawRect(
+                color = Color(0xFF0F172A),
+                topLeft = Offset(w / 2f - w * 0.08f, h - h * 0.25f - 1.dp.toPx()),
+                size = androidx.compose.ui.geometry.Size(w * 0.16f, h * 0.25f)
             )
         }
     }
@@ -1284,8 +1504,12 @@ fun FetchHistoryBars(fetchHistory: List<FetchResult>, modifier: Modifier = Modif
             
             val color = when (item.status) {
                 1 -> Color(0xFF00FF88) // Green (API Success)
-                2 -> Color(0xFFFFB74D) // Yellow (Cache Hit)
-                else -> Color(0xFFFF0055) // Red (Failure)
+                2 -> Color(0xFF00FF88) // Green (OK - Speed Limit Snapped)
+                6 -> Color(0xFFFFB74D) // Yellow (OK - Speed Limit Deduced)
+                3 -> Color(0xFFFF5252) // Light Red (Off-road > 50m)
+                4 -> Color(0xFFE040FB) // Magenta/Purple (No Speed Tag)
+                5 -> Color(0xFF448AFF) // Blue (No Roads Nearby)
+                else -> Color(0xFF90A4AE) // Gray (No Map Loaded)
             }
             Box(
                 modifier = Modifier
@@ -1294,7 +1518,7 @@ fun FetchHistoryBars(fetchHistory: List<FetchResult>, modifier: Modifier = Modif
                     .background(color)
             )
         }
-        val emptySlots = 10 - fetchHistory.size
+        val emptySlots = 20 - fetchHistory.size
         if (emptySlots > 0) {
             items(emptySlots) {
                 Box(
@@ -1304,6 +1528,35 @@ fun FetchHistoryBars(fetchHistory: List<FetchResult>, modifier: Modifier = Modif
                         .background(Color(0xFF334155))
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun LegendItem(color: Color, name: String, desc: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 8.dp, height = 14.dp)
+                .background(color)
+        )
+        Column {
+            Text(
+                text = name,
+                color = color,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                text = desc,
+                color = Color.LightGray,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace
+            )
         }
     }
 }

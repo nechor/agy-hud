@@ -10,11 +10,21 @@ import com.graphhopper.routing.ev.DecimalEncodedValue
 import com.graphhopper.routing.ev.MaxSpeed
 import com.graphhopper.routing.ev.VehicleAccess
 import com.graphhopper.routing.ev.VehicleSpeed
+import com.graphhopper.routing.ev.EnumEncodedValue
+import com.graphhopper.routing.ev.RoadClass
 import com.graphhopper.storage.index.LocationIndex
 import com.graphhopper.storage.index.Snap
 import com.graphhopper.util.EdgeIteratorState
 import com.graphhopper.util.shapes.GHPoint
 import java.io.File
+
+data class SpeedLimitResult(
+    val limit: Double,
+    val roadName: String,
+    val roadClass: String,
+    val status: Int,
+    val isUrban: Boolean
+)
 
 class MapMatchingEngine(private val baseDir: File) {
     companion object {
@@ -29,6 +39,8 @@ class MapMatchingEngine(private val baseDir: File) {
     private var hopper: GraphHopper? = null
     private var isInitialized = false
     private var maxSpeedEnc: DecimalEncodedValue? = null
+    private var roadClassEnc: EnumEncodedValue<RoadClass>? = null
+    private var carAccessEnc: com.graphhopper.routing.ev.BooleanEncodedValue? = null
 
     /**
      * Initializes the GraphHopper instance if pre-compiled files exist.
@@ -45,15 +57,22 @@ class MapMatchingEngine(private val baseDir: File) {
         Thread {
             try {
                 val gh = AndroidGraphHopper().apply {
-                    osmFile = ""
                     graphHopperLocation = graphFolder.absolutePath
                     profiles = listOf(Profile("car").setVehicle("car").setWeighting("custom"))
                 }
                 
-                gh.importOrLoad()
+                if (!gh.load()) {
+                    throw IllegalStateException("Failed to load GraphHopper directory")
+                }
                 
                 hopper = gh
                 maxSpeedEnc = gh.encodingManager.getDecimalEncodedValue(MaxSpeed.KEY)
+                if (gh.encodingManager.hasEncodedValue(RoadClass.KEY)) {
+                    roadClassEnc = gh.encodingManager.getEnumEncodedValue(RoadClass.KEY, RoadClass::class.java)
+                }
+                if (gh.encodingManager.hasEncodedValue(VehicleAccess.key("car"))) {
+                    carAccessEnc = gh.encodingManager.getBooleanEncodedValue(VehicleAccess.key("car"))
+                }
                 isInitialized = true
                 Log.i(TAG, "GraphHopper loaded successfully from storage!")
                 onComplete(true)
@@ -91,6 +110,12 @@ class MapMatchingEngine(private val baseDir: File) {
                 
                 hopper = gh
                 maxSpeedEnc = gh.encodingManager.getDecimalEncodedValue(MaxSpeed.KEY)
+                if (gh.encodingManager.hasEncodedValue(RoadClass.KEY)) {
+                    roadClassEnc = gh.encodingManager.getEnumEncodedValue(RoadClass.KEY, RoadClass::class.java)
+                }
+                if (gh.encodingManager.hasEncodedValue(VehicleAccess.key("car"))) {
+                    carAccessEnc = gh.encodingManager.getBooleanEncodedValue(VehicleAccess.key("car"))
+                }
                 isInitialized = true
                 Log.i(TAG, "GraphHopper compiled OSM XML data successfully!")
                 onComplete(true)
@@ -102,17 +127,19 @@ class MapMatchingEngine(private val baseDir: File) {
         }.start()
     }
 
-    /**
-     * Find nearest road edge and return the max speed limit in km/h.
-     * Restricts matching to a maximum of 50 meters distance.
-     */
-    fun getSpeedLimit(latitude: Double, longitude: Double): Double? {
+    fun getSpeedLimit(latitude: Double, longitude: Double): SpeedLimitResult? {
         if (!isInitialized) return null
         
         val currentHopper = hopper ?: return null
         try {
             val index: LocationIndex = currentHopper.locationIndex
-            val snap: Snap = index.findClosest(latitude, longitude, com.graphhopper.routing.util.EdgeFilter.ALL_EDGES)
+            val accessEnc = carAccessEnc
+            val filter = if (accessEnc != null) {
+                com.graphhopper.routing.util.EdgeFilter { edge -> edge.get(accessEnc) }
+            } else {
+                com.graphhopper.routing.util.EdgeFilter.ALL_EDGES
+            }
+            val snap: Snap = index.findClosest(latitude, longitude, filter)
 
             if (snap.isValid) {
                 val snappedPoint = snap.snappedPoint
@@ -124,11 +151,46 @@ class MapMatchingEngine(private val baseDir: File) {
                 }
 
                 val edge: EdgeIteratorState = snap.closestEdge
+                val roadName = edge.name ?: ""
+                val rEnc = roadClassEnc
+                val roadClassStr = if (rEnc != null) {
+                    edge.get(rEnc)?.name ?: "UNKNOWN"
+                } else {
+                    "UNKNOWN"
+                }
+
                 val speedEnc = maxSpeedEnc
                 if (speedEnc != null) {
                     val speed = edge.get(speedEnc)
                     if (!speed.isNaN() && speed > 0 && speed < 200) {
-                        return speed
+                        val isUrbanResult = isLikelyUrbanRoad(roadName) || 
+                                           (rEnc != null && (edge.get(rEnc) == RoadClass.RESIDENTIAL || edge.get(rEnc) == RoadClass.LIVING_STREET || edge.get(rEnc) == RoadClass.UNCLASSIFIED))
+                        return SpeedLimitResult(speed, roadName, roadClassStr, 2, isUrbanResult)
+                    }
+                }
+                
+                // Fallback to road class default limit
+                if (rEnc != null) {
+                    val rClass = edge.get(rEnc)
+                    if (rClass != null) {
+                        val (fallback, status) = when (rClass) {
+                            RoadClass.MOTORWAY -> 140.0 to 6
+                            RoadClass.TRUNK -> 120.0 to 6
+                            RoadClass.PRIMARY -> (if (isLikelyUrbanRoad(roadName)) 50.0 else 90.0) to 6
+                            RoadClass.SECONDARY -> (if (isLikelyUrbanRoad(roadName)) 50.0 else 90.0) to 6
+                            RoadClass.TERTIARY -> (if (isLikelyUrbanRoad(roadName)) 50.0 else 90.0) to 6
+                            RoadClass.RESIDENTIAL -> 50.0 to 6
+                            RoadClass.LIVING_STREET -> 20.0 to 6
+                            RoadClass.SERVICE -> 30.0 to 6
+                            RoadClass.TRACK -> 30.0 to 6
+                            RoadClass.UNCLASSIFIED -> 50.0 to 6
+                            else -> 50.0 to 4 // ROAD, OTHER, etc. -> default 50.0, status 4 (Purple)
+                        }
+                        val isUrbanResult = isLikelyUrbanRoad(roadName) || 
+                                           rClass == RoadClass.RESIDENTIAL || 
+                                           rClass == RoadClass.LIVING_STREET ||
+                                           rClass == RoadClass.UNCLASSIFIED
+                        return SpeedLimitResult(fallback, roadName, roadClassStr, status, isUrbanResult)
                     }
                 }
             }
@@ -137,6 +199,59 @@ class MapMatchingEngine(private val baseDir: File) {
             logErrorToFile("Error matching speed limit at $latitude, $longitude", e)
         }
         return null
+    }
+
+    private fun isLikelyUrbanRoad(roadName: String): Boolean {
+        if (roadName.isEmpty()) return false
+        val ruralPatterns = listOf(
+            "dk", "dw", "droga krajowa", "droga wojewódzka", "droga powiatowa"
+        )
+        val nameLower = roadName.lowercase().trim()
+        for (pattern in ruralPatterns) {
+            if (nameLower.contains(pattern)) return false
+        }
+        if (nameLower.matches(Regex("\\d+[a-z]?"))) return false
+        return true
+    }
+
+    fun getQueryFailureReason(latitude: Double, longitude: Double): String {
+        if (!isInitialized || hopper == null) return "No Map Loaded"
+        try {
+            val index: LocationIndex = hopper!!.locationIndex
+            val accessEnc = carAccessEnc
+            val filter = if (accessEnc != null) {
+                com.graphhopper.routing.util.EdgeFilter { edge -> edge.get(accessEnc) }
+            } else {
+                com.graphhopper.routing.util.EdgeFilter.ALL_EDGES
+            }
+            val snap: Snap = index.findClosest(latitude, longitude, filter)
+            if (!snap.isValid) {
+                return "No Roads Found"
+            }
+            val snappedPoint = snap.snappedPoint
+            val dist = calculateDistanceMeters(latitude, longitude, snappedPoint.lat, snappedPoint.lon)
+            if (dist > 50.0) {
+                return "Off-road (${dist.toInt()}m)"
+            }
+            val edge: EdgeIteratorState = snap.closestEdge
+            val speedEnc = maxSpeedEnc
+            if (speedEnc != null) {
+                val speed = edge.get(speedEnc)
+                if (!speed.isNaN() && speed > 0 && speed < 200) {
+                    return "OK"
+                }
+            }
+            val rEnc = roadClassEnc
+            if (rEnc != null) {
+                val rClass = edge.get(rEnc)
+                if (rClass != null) {
+                    return "OK"
+                }
+            }
+            return "No Limit Tag"
+        } catch (e: Exception) {
+            return "Query Error"
+        }
     }
 
     private fun calculateDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {

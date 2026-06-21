@@ -871,6 +871,14 @@ fun HudScreen(
                                 fontSize = 8.sp,
                                 fontFamily = FontFamily.Monospace
                             )
+                            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = mapStatus,
+                                color = Color(0xFF00F0FF).copy(alpha = 0.8f),
+                                fontSize = 7.sp,
+                                fontFamily = FontFamily.Monospace,
+                                textAlign = TextAlign.End
+                            )
                         }
                         HolographicSpeedLimit(
                             limit = speedLimit,

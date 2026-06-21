@@ -52,8 +52,15 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipEntry
 import java.io.IOException
 import kotlin.math.roundToInt
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
 import kotlin.math.floor
 import kotlin.math.abs
+
+data class FetchResult(val id: Long, val status: Int)
 
 class MainActivity : ComponentActivity(), LocationListener {
 
@@ -100,7 +107,8 @@ class MainActivity : ComponentActivity(), LocationListener {
     }
 
     // Speed limit query status history (last 10 attempts)
-    val fetchHistory = mutableStateListOf<Int>()
+    val fetchHistory = mutableStateListOf<FetchResult>()
+    private var fetchIdSequence = 0L
     val apiFetchCount = mutableStateOf(0)
     val cacheFetchCount = mutableStateOf(0)
 
@@ -112,7 +120,7 @@ class MainActivity : ComponentActivity(), LocationListener {
 
     private fun recordFetchResult(status: Int) { // 0 = fail, 1 = api_success, 2 = cache_success
         runOnUiThread {
-            fetchHistory.add(status)
+            fetchHistory.add(FetchResult(fetchIdSequence++, status))
             if (fetchHistory.size > 10) {
                 fetchHistory.removeAt(0)
             }
@@ -652,7 +660,7 @@ fun HudScreen(
     speedColorHistory: List<Color>,
     elevationHistory: List<Float>,
     downloadProgress: Float?,
-    fetchHistory: List<Int>,
+    fetchHistory: List<FetchResult>,
     apiFetchCount: Int,
     cacheFetchCount: Int,
     onToggleMirror: () -> Unit,
@@ -1259,29 +1267,43 @@ fun SignalStrengthIndicator(
 }
 
 @Composable
-fun FetchHistoryBars(fetchHistory: List<Int>, modifier: Modifier = Modifier) {
-    Row(
+fun FetchHistoryBars(fetchHistory: List<FetchResult>, modifier: Modifier = Modifier) {
+    LazyRow(
         modifier = modifier.padding(top = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        for (i in 0 until 10) {
-            val color = when {
-                i < fetchHistory.size -> {
-                    when (fetchHistory[i]) {
-                        1 -> Color(0xFF00FF88) // Green (API Success)
-                        2 -> Color(0xFFFFB74D) // Yellow (Cache Hit)
-                        else -> Color(0xFFFF0055) // Red (Failure)
-                    }
-                }
-                else -> Color(0xFF334155) // Dark gray for empty slots
+        items(
+            items = fetchHistory,
+            key = { it.id }
+        ) { item ->
+            val animatedHeight = remember { Animatable(0f) }
+            LaunchedEffect(item.id) {
+                animatedHeight.animateTo(12f, animationSpec = tween(300))
+            }
+            
+            val color = when (item.status) {
+                1 -> Color(0xFF00FF88) // Green (API Success)
+                2 -> Color(0xFFFFB74D) // Yellow (Cache Hit)
+                else -> Color(0xFFFF0055) // Red (Failure)
             }
             Box(
                 modifier = Modifier
-                    .size(width = 5.dp, height = 12.dp)
+                    .size(width = 5.dp, height = animatedHeight.value.dp)
                     .clip(RoundedCornerShape(1.dp))
                     .background(color)
             )
+        }
+        val emptySlots = 10 - fetchHistory.size
+        if (emptySlots > 0) {
+            items(emptySlots) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 5.dp, height = 12.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(Color(0xFF334155))
+                )
+            }
         }
     }
 }

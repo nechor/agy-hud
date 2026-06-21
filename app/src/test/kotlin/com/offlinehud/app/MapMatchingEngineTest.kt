@@ -87,4 +87,82 @@ class MapMatchingEngineTest {
         org.junit.Assert.assertNotNull("Speed limit should not be null near the roadway", speedLimit)
         org.junit.Assert.assertEquals(50.0, speedLimit!!, 0.1)
     }
+
+    @Test
+    fun testQueryPerformanceOnCompiledGraph() {
+        val zipFile = File("../graphhopper.zip")
+        if (!zipFile.exists()) {
+            println("Skipping benchmark: graphhopper.zip not found at project root")
+            return
+        }
+        
+        val targetDir = tempFolder.newFolder("unzipped_graph")
+        unzip(zipFile, targetDir)
+        
+        val testEngine = MapMatchingEngine(targetDir)
+        val latch = CountDownLatch(1)
+        var initSuccess = false
+        testEngine.initialize { success ->
+            initSuccess = success
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS)
+        
+        org.junit.Assert.assertTrue("Compiled graph should initialize successfully", initSuccess)
+        
+        val coords = listOf(
+            Pair(53.7784, 20.4801),
+            Pair(53.7795, 20.4815),
+            Pair(53.7750, 20.4780),
+            Pair(53.7810, 20.4900),
+            Pair(53.7700, 20.4600)
+        )
+        
+        for (coord in coords) {
+            testEngine.getSpeedLimit(coord.first, coord.second)
+        }
+        
+        val iterations = 1000
+        val startTime = System.nanoTime()
+        var matchedCount = 0
+        for (i in 0 until iterations) {
+            val coord = coords[i % coords.size]
+            val limit = testEngine.getSpeedLimit(coord.first, coord.second)
+            if (limit != null) {
+                matchedCount++
+            }
+        }
+        val endTime = System.nanoTime()
+        val totalTimeMs = (endTime - startTime) / 1_000_000.0
+        val avgQueryTimeUs = ((endTime - startTime) / 1_000.0) / iterations
+        
+        println("=== GraphHopper Benchmark Results ===")
+        println("Processed $iterations queries in ${String.format("%.2f", totalTimeMs)} ms")
+        println("Average query time: ${String.format("%.2f", avgQueryTimeUs)} us (microseconds)")
+        println("Road snap success rate: ${matchedCount * 100 / iterations}%")
+        println("=====================================")
+        
+        org.junit.Assert.assertTrue("Average query time should be under 5ms (5000us)", avgQueryTimeUs < 5000.0)
+    }
+
+    private fun unzip(zipFile: File, targetDirectory: File) {
+        java.util.zip.ZipInputStream(java.io.BufferedInputStream(java.io.FileInputStream(zipFile))).use { zis ->
+            var entry: java.util.zip.ZipEntry?
+            while (zis.nextEntry.also { entry = it } != null) {
+                val file = File(targetDirectory, entry!!.name)
+                val dir = if (entry!!.isDirectory) file else file.parentFile
+                if (!dir.isDirectory && !dir.mkdirs()) {
+                    throw java.io.IOException("Failed to ensure directory: ${dir.absolutePath}")
+                }
+                if (entry!!.isDirectory) continue
+                java.io.BufferedOutputStream(java.io.FileOutputStream(file)).use { dest ->
+                    val buffer = ByteArray(8192)
+                    var count: Int
+                    while (zis.read(buffer).also { count = it } != -1) {
+                        dest.write(buffer, 0, count)
+                    }
+                }
+            }
+        }
+    }
 }

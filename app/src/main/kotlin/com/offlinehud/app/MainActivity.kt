@@ -590,13 +590,17 @@ class MainActivity : ComponentActivity(), LocationListener {
                             val buffer = ByteArray(8192)
                             var bytesRead: Int
                             var totalBytesRead = 0L
+                            var lastProgressUpdate = 0.0f
                             while (input.read(buffer).also { bytesRead = it } != -1) {
                                 output.write(buffer, 0, bytesRead)
                                 totalBytesRead += bytesRead
                                 if (contentLength > 0) {
                                     val progress = totalBytesRead.toFloat() / contentLength
-                                    runOnUiThread {
-                                        downloadProgress.value = progress
+                                    if (progress - lastProgressUpdate >= 0.01f || progress == 1.0f) {
+                                        lastProgressUpdate = progress
+                                        runOnUiThread {
+                                            downloadProgress.value = progress
+                                        }
                                     }
                                 }
                             }

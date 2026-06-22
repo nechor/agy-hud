@@ -57,7 +57,12 @@ class MapMatchingEngine(private val baseDir: File) {
         Thread {
             try {
                 val gh = AndroidGraphHopper().apply {
-                    graphHopperLocation = graphFolder.absolutePath
+                    val config = com.graphhopper.GraphHopperConfig().apply {
+                        putObject("graph.dataaccess.default_type", "MMAP")
+                        putObject("graph.location", graphFolder.absolutePath)
+                        putObject("import.osm.ignored_highways", "")
+                    }
+                    init(config)
                     profiles = listOf(Profile("car").setVehicle("car").setWeighting("custom"))
                 }
                 

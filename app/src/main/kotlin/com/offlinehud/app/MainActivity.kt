@@ -475,7 +475,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                     mapStatus.value = "Downloading Map..."
                 }
                 
-                val url = java.net.URL("https://raw.githubusercontent.com/nechor/agy-hud/master/graphhopper.zip")
+                val url = java.net.URL("https://media.githubusercontent.com/media/nechor/agy-hud/master/graphhopper.zip")
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
                 conn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")

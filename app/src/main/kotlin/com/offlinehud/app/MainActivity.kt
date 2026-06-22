@@ -84,6 +84,9 @@ class MainActivity : ComponentActivity(), LocationListener {
     private val isUrbanArea = mutableStateOf(false)
     private val currentFetchStatus = mutableStateOf(0)
     private val downloadProgress = mutableStateOf<Float?>(null)
+    private val syncPhase = mutableStateOf<String?>(null)
+    private val showDownloadSuccessDialog = mutableStateOf(false)
+    private val downloadErrorText = mutableStateOf<String?>(null)
 
     // History logs for step charts
     val speedHistory = mutableStateListOf<Float>()
@@ -200,6 +203,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                     speedColorHistory = speedColorHistory,
                     elevationHistory = elevationHistory,
                     downloadProgress = downloadProgress.value,
+                    syncPhase = syncPhase.value,
                     fetchHistory = fetchHistory,
                     okFetchCount = okFetchCount.value,
                     deducedFetchCount = deducedFetchCount.value,
@@ -210,6 +214,78 @@ class MainActivity : ComponentActivity(), LocationListener {
                     onToggleMirror = { isSymmetricMirror.value = !isSymmetricMirror.value },
                     onDownloadData = { downloadOfflineData() }
                 )
+
+                if (showDownloadSuccessDialog.value) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { showDownloadSuccessDialog.value = false },
+                        title = {
+                            Text(
+                                text = "DOWNLOAD COMPLETE",
+                                color = Color(0xFF00FF88),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        },
+                        text = {
+                            Text(
+                                text = "Map database of Poland successfully downloaded and initialized. Offline map matching is ready.",
+                                color = Color.White,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp
+                            )
+                        },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(
+                                onClick = { showDownloadSuccessDialog.value = false }
+                            ) {
+                                Text(
+                                    "OK",
+                                    color = Color(0xFF00FF88),
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        },
+                        containerColor = Color(0xFF0F172A),
+                        textContentColor = Color.White
+                    )
+                }
+
+                if (downloadErrorText.value != null) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { downloadErrorText.value = null },
+                        title = {
+                            Text(
+                                text = "DOWNLOAD ERROR",
+                                color = Color(0xFFFF5252),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        },
+                        text = {
+                            Text(
+                                text = downloadErrorText.value ?: "Unknown error occurred.",
+                                color = Color.White,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp
+                            )
+                        },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(
+                                onClick = { downloadErrorText.value = null }
+                            ) {
+                                Text(
+                                    "OK",
+                                    color = Color(0xFFFF5252),
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        },
+                        containerColor = Color(0xFF0F172A),
+                        textContentColor = Color.White
+                    )
+                }
             }
         }
     }
@@ -466,7 +542,8 @@ class MainActivity : ComponentActivity(), LocationListener {
         if (isDownloadingCache) return
         isDownloadingCache = true
         runOnUiThread {
-            downloadProgress.value = 0.1f
+            downloadProgress.value = 0f
+            syncPhase.value = "CONNECTING"
         }
         
         Thread {
@@ -503,7 +580,8 @@ class MainActivity : ComponentActivity(), LocationListener {
                     val zipFile = File(filesDir, "graphhopper.zip")
                     
                     runOnUiThread {
-                        downloadProgress.value = 0.3f
+                        syncPhase.value = "DOWNLOADING"
+                        downloadProgress.value = 0f
                         mapStatus.value = "Saving ZIP..."
                     }
                     
@@ -516,7 +594,7 @@ class MainActivity : ComponentActivity(), LocationListener {
                                 output.write(buffer, 0, bytesRead)
                                 totalBytesRead += bytesRead
                                 if (contentLength > 0) {
-                                    val progress = 0.3f + 0.5f * (totalBytesRead.toFloat() / contentLength)
+                                    val progress = totalBytesRead.toFloat() / contentLength
                                     runOnUiThread {
                                         downloadProgress.value = progress
                                     }
@@ -526,7 +604,8 @@ class MainActivity : ComponentActivity(), LocationListener {
                     }
                     
                     runOnUiThread {
-                        downloadProgress.value = 0.8f
+                        syncPhase.value = "UNZIPPING"
+                        downloadProgress.value = 0f
                         mapStatus.value = "Unzipping Map..."
                     }
                     
@@ -536,20 +615,26 @@ class MainActivity : ComponentActivity(), LocationListener {
                     }
                     graphFolder.mkdirs()
                     
-                    unzip(zipFile, filesDir)
+                    unzip(zipFile, filesDir) { progress ->
+                        runOnUiThread {
+                            downloadProgress.value = progress
+                        }
+                    }
                     
                     if (zipFile.exists()) {
                         zipFile.delete()
                     }
                     
                     runOnUiThread {
-                        downloadProgress.value = 0.9f
+                        syncPhase.value = "INITIALIZING"
+                        downloadProgress.value = null
                         mapStatus.value = "Loading Map..."
                     }
                     
                     mapMatchingEngine.initialize { success ->
                         runOnUiThread {
                             downloadProgress.value = null
+                            syncPhase.value = null
                             isDownloadingCache = false
                             if (success) {
                                 cacheCenterLat = -1.0
@@ -558,9 +643,11 @@ class MainActivity : ComponentActivity(), LocationListener {
                                 saveCacheToFile()
                                 mapStatus.value = "Offline Map: Ready"
                                 recordFetchResult(1)
+                                showDownloadSuccessDialog.value = true
                             } else {
                                 mapStatus.value = "Load Failed"
                                 recordFetchResult(0)
+                                downloadErrorText.value = "Failed to initialize GraphHopper engine after unzipping."
                             }
                         }
                     }
@@ -569,9 +656,11 @@ class MainActivity : ComponentActivity(), LocationListener {
                     logErrorToFile("MainActivity", "GitHub download returned error code: $status")
                     runOnUiThread {
                         downloadProgress.value = null
+                        syncPhase.value = null
                         isDownloadingCache = false
                         mapStatus.value = "Download Failed (HTTP $status)"
                         recordFetchResult(0)
+                        downloadErrorText.value = "Failed to connect to server. HTTP Status: $status"
                     }
                 }
             } catch (e: Exception) {
@@ -579,15 +668,22 @@ class MainActivity : ComponentActivity(), LocationListener {
                 logErrorToFile("MainActivity", "Failed to download precompiled map data", e)
                 runOnUiThread {
                     downloadProgress.value = null
+                    syncPhase.value = null
                     isDownloadingCache = false
                     mapStatus.value = "Download Error"
                     recordFetchResult(0)
+                    downloadErrorText.value = "An error occurred during map synchronization:\n${e.localizedMessage ?: e.toString()}"
                 }
             }
         }.start()
     }
 
-    private fun unzip(zipFile: File, targetDirectory: File) {
+    private fun unzip(zipFile: File, targetDirectory: File, onProgress: (Float) -> Unit) {
+        val zip = java.util.zip.ZipFile(zipFile)
+        val totalEntries = zip.size()
+        zip.close()
+        
+        var extractedCount = 0
         ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zis ->
             var entry: ZipEntry?
             while (zis.nextEntry.also { entry = it } != null) {
@@ -603,6 +699,10 @@ class MainActivity : ComponentActivity(), LocationListener {
                     while (zis.read(buffer).also { count = it } != -1) {
                         dest.write(buffer, 0, count)
                     }
+                }
+                extractedCount++
+                if (totalEntries > 0) {
+                    onProgress(extractedCount.toFloat() / totalEntries)
                 }
             }
         }
@@ -700,6 +800,7 @@ fun HudScreen(
     speedColorHistory: List<Color>,
     elevationHistory: List<Float>,
     downloadProgress: Float?,
+    syncPhase: String?,
     fetchHistory: List<FetchResult>,
     okFetchCount: Int,
     deducedFetchCount: Int,
@@ -1099,6 +1200,7 @@ fun HudScreen(
             SciFiBottomConsole(
                 isMirror = isMirror,
                 downloadProgress = downloadProgress,
+                syncPhase = syncPhase,
                 onToggleMirror = onToggleMirror,
                 onDownloadData = onDownloadData
             )
@@ -1633,10 +1735,13 @@ fun SciFiHeader(
     }
 }
 
+
+
 @Composable
 fun SciFiBottomConsole(
     isMirror: Boolean,
     downloadProgress: Float?,
+    syncPhase: String?,
     onToggleMirror: () -> Unit,
     onDownloadData: () -> Unit
 ) {
@@ -1652,15 +1757,23 @@ fun SciFiBottomConsole(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (downloadProgress != null) {
+            if (downloadProgress != null || syncPhase != null) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    val progressPercent = if (downloadProgress != null) "${(downloadProgress * 100).roundToInt()}%" else "..."
+                    val label = when (syncPhase) {
+                        "CONNECTING" -> "CONNECTING TO SERVERS..."
+                        "DOWNLOADING" -> "DOWNLOADING DATA... $progressPercent"
+                        "UNZIPPING" -> "UNZIPPING MAP DATA... $progressPercent"
+                        "INITIALIZING" -> "INITIALIZING ENGINE..."
+                        else -> "SYNCHRONIZING..."
+                    }
                     Text(
-                        text = "DOWNLOADING OFFLINE DATA... ${(downloadProgress * 100).roundToInt()}%",
-                        color = Color(0xFF00F0FF),
+                        text = label,
+                        color = Color(0xFF00FF88),
                         fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
@@ -1674,7 +1787,7 @@ fun SciFiBottomConsole(
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(downloadProgress)
+                                .fillMaxWidth(downloadProgress ?: 0f)
                                 .fillMaxHeight()
                                 .background(
                                     brush = Brush.horizontalGradient(
@@ -1726,15 +1839,15 @@ fun SciFiBottomConsole(
                         .background(Color(0xFF0F172A).copy(alpha = 0.6f))
                         .border(
                             width = 1.dp,
-                            color = if (downloadProgress != null) Color(0xFF00FF88) else Color(0xFF1E293B),
+                            color = if (downloadProgress != null || syncPhase != null) Color(0xFF00FF88) else Color(0xFF1E293B),
                             shape = RoundedCornerShape(10.dp)
                         )
-                        .clickable(enabled = downloadProgress == null) { onDownloadData() },
+                        .clickable(enabled = downloadProgress == null && syncPhase == null) { onDownloadData() },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (downloadProgress != null) "SYNCING..." else "DOWNLOAD OFFLINE DATA",
-                        color = if (downloadProgress != null) Color(0xFF00FF88) else Color(0xFF00FF88).copy(alpha = 0.8f),
+                        text = if (downloadProgress != null || syncPhase != null) "SYNCING..." else "DOWNLOAD OFFLINE DATA",
+                        color = if (downloadProgress != null || syncPhase != null) Color(0xFF00FF88) else Color(0xFF00FF88).copy(alpha = 0.8f),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,

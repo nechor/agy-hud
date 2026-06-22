@@ -552,50 +552,87 @@ class MainActivity : ComponentActivity(), LocationListener {
                     mapStatus.value = "Downloading Map..."
                 }
                 
-                val url = java.net.URL("https://media.githubusercontent.com/media/nechor/agy-hud/master/graphhopper.zip")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
-                conn.connectTimeout = 60000
-                conn.readTimeout = 300000
-                
-                var status = conn.responseCode
-                var downloadUrl = url
-                var finalConn = conn
-                if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP || 
-                    status == java.net.HttpURLConnection.HTTP_MOVED_PERM || 
-                    status == 307 || status == 308) {
-                    val newUrl = conn.getHeaderField("Location")
-                    downloadUrl = java.net.URL(newUrl)
-                    finalConn = downloadUrl.openConnection() as java.net.HttpURLConnection
-                    finalConn.requestMethod = "GET"
-                    finalConn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
-                    finalConn.connectTimeout = 60000
-                    finalConn.readTimeout = 300000
-                    status = finalConn.responseCode
+                val zipFile = File(filesDir, "graphhopper.zip")
+                if (zipFile.exists()) {
+                    zipFile.delete()
                 }
 
-                if (status == 200) {
-                    val contentLength = finalConn.contentLength
-                    val zipFile = File(filesDir, "graphhopper.zip")
-                    
-                    runOnUiThread {
-                        syncPhase.value = "DOWNLOADING"
-                        downloadProgress.value = 0f
-                        mapStatus.value = "Saving ZIP..."
-                    }
-                    
-                    finalConn.inputStream.use { input ->
-                        zipFile.outputStream().use { output ->
+                var completed = false
+                var attempts = 0
+                val maxAttempts = 15
+                var totalBytesRead = 0L
+
+                runOnUiThread {
+                    syncPhase.value = "DOWNLOADING"
+                    downloadProgress.value = 0f
+                    mapStatus.value = "Saving ZIP..."
+                }
+
+                while (!completed && attempts < maxAttempts) {
+                    var input: java.io.InputStream? = null
+                    var output: java.io.FileOutputStream? = null
+                    var connection: java.net.HttpURLConnection? = null
+                    try {
+                        val currentLength = zipFile.length()
+                        val downloadUrl = java.net.URL("https://media.githubusercontent.com/media/nechor/agy-hud/master/graphhopper.zip")
+                        connection = downloadUrl.openConnection() as java.net.HttpURLConnection
+                        connection.requestMethod = "GET"
+                        connection.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
+                        connection.connectTimeout = 30000
+                        connection.readTimeout = 45000
+                        
+                        if (currentLength > 0) {
+                            connection.setRequestProperty("Range", "bytes=$currentLength-")
+                            Log.d("MainActivity", "Attempting resume from byte $currentLength")
+                        }
+                        
+                        var status = connection.responseCode
+                        
+                        // Handle redirection
+                        if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP || 
+                            status == java.net.HttpURLConnection.HTTP_MOVED_PERM || 
+                            status == 307 || status == 308) {
+                            val newUrl = connection.getHeaderField("Location")
+                            connection.disconnect()
+                            
+                            val redirectUrl = java.net.URL(newUrl)
+                            connection = redirectUrl.openConnection() as java.net.HttpURLConnection
+                            connection.requestMethod = "GET"
+                            connection.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
+                            connection.connectTimeout = 30000
+                            connection.readTimeout = 45000
+                            if (currentLength > 0) {
+                                connection.setRequestProperty("Range", "bytes=$currentLength-")
+                            }
+                            status = connection.responseCode
+                        }
+                        
+                        if (status == 200 || status == 206) {
+                            val serverLength = connection.contentLengthLong
+                            val totalExpectedLength = if (status == 206) {
+                                val contentRange = connection.getHeaderField("Content-Range")
+                                if (contentRange != null) {
+                                    contentRange.substringAfterLast("/").toLongOrNull() ?: (currentLength + serverLength)
+                                } else {
+                                    currentLength + serverLength
+                                }
+                            } else {
+                                serverLength
+                            }
+                            
+                            input = connection.inputStream
+                            output = java.io.FileOutputStream(zipFile, status == 206)
+                            
                             val buffer = ByteArray(8192)
                             var bytesRead: Int
-                            var totalBytesRead = 0L
-                            var lastProgressUpdate = 0.0f
+                            totalBytesRead = currentLength
+                            var lastProgressUpdate = totalBytesRead.toFloat() / totalExpectedLength
+                            
                             while (input.read(buffer).also { bytesRead = it } != -1) {
                                 output.write(buffer, 0, bytesRead)
                                 totalBytesRead += bytesRead
-                                if (contentLength > 0) {
-                                    val progress = totalBytesRead.toFloat() / contentLength
+                                if (totalExpectedLength > 0) {
+                                    val progress = totalBytesRead.toFloat() / totalExpectedLength
                                     if (progress - lastProgressUpdate >= 0.01f || progress == 1.0f) {
                                         lastProgressUpdate = progress
                                         runOnUiThread {
@@ -604,9 +641,26 @@ class MainActivity : ComponentActivity(), LocationListener {
                                     }
                                 }
                             }
+                            
+                            completed = true
+                        } else {
+                            throw java.io.IOException("Server returned status code: $status")
                         }
+                    } catch (e: Exception) {
+                        attempts++
+                        Log.w("MainActivity", "Download attempt $attempts failed: ${e.message}. Retrying in 2 seconds...", e)
+                        Thread.sleep(2000)
+                        if (attempts >= maxAttempts) {
+                            throw e
+                        }
+                    } finally {
+                        input?.close()
+                        output?.close()
+                        connection?.disconnect()
                     }
-                    
+                }
+
+                if (completed) {
                     runOnUiThread {
                         syncPhase.value = "UNZIPPING"
                         downloadProgress.value = 0f
@@ -654,17 +708,6 @@ class MainActivity : ComponentActivity(), LocationListener {
                                 downloadErrorText.value = "Failed to initialize GraphHopper engine after unzipping."
                             }
                         }
-                    }
-                } else {
-                    Log.e("MainActivity", "GitHub download returned error code: $status")
-                    logErrorToFile("MainActivity", "GitHub download returned error code: $status")
-                    runOnUiThread {
-                        downloadProgress.value = null
-                        syncPhase.value = null
-                        isDownloadingCache = false
-                        mapStatus.value = "Download Failed (HTTP $status)"
-                        recordFetchResult(0)
-                        downloadErrorText.value = "Failed to connect to server. HTTP Status: $status"
                     }
                 }
             } catch (e: Exception) {

@@ -556,8 +556,8 @@ class MainActivity : ComponentActivity(), LocationListener {
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
                 conn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
-                conn.connectTimeout = 15000
-                conn.readTimeout = 30000
+                conn.connectTimeout = 60000
+                conn.readTimeout = 300000
                 
                 var status = conn.responseCode
                 var downloadUrl = url
@@ -570,8 +570,8 @@ class MainActivity : ComponentActivity(), LocationListener {
                     finalConn = downloadUrl.openConnection() as java.net.HttpURLConnection
                     finalConn.requestMethod = "GET"
                     finalConn.setRequestProperty("User-Agent", "OfflineHUDApp/1.0 (contact@example.com)")
-                    finalConn.connectTimeout = 15000
-                    finalConn.readTimeout = 30000
+                    finalConn.connectTimeout = 60000
+                    finalConn.readTimeout = 300000
                     status = finalConn.responseCode
                 }
 

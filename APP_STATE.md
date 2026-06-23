@@ -58,8 +58,15 @@ Interfejs graficzny jest zrealizowany w systemie **Jetpack Compose** o ciemnej, 
 
 ## Kluczowe Mechanizmy Logiki Biznesowej
 
-*   **Offline Map Matching (GraphHopper)**:
-    Aplikacja próbuje zainicjalizować silnik lokalnego wyszukiwania dróg w katalogu `filesDir/graphhopper`. Jeśli katalog nie istnieje, automatycznie aktywuje się bezpieczny tryb **Mock**, symulujący zachowanie silnika dla trasy w Warszawie i pozwalający na pobieranie danych online w innych lokalizacjach.
+*   **Offline Map Matching (GraphHopper) i Dedukcja Limitów Prędkości**:
+    Aplikacja próbuje zainicjalizować silnik lokalnego wyszukiwania dróg w katalogu `filesDir/graphhopper`. Jeśli katalog nie istnieje, automatycznie aktywuje się bezpieczny tryb **Mock**. 
+    W przypadku braku jawnego tagu `maxspeed` na drodze, wdrożony jest zaawansowany algorytm dedukowania dopuszczalnej prędkości zgodny z polskim prawem o ruchu drogowym:
+    *   **Autostrady (MOTORWAY)** -> 140 km/h.
+    *   **Drogi ekspresowe (TRUNK o nazwach Sxx)** -> 120 km/h (dwujezdniowe / jednokierunkowe) lub 100 km/h (jednojezdniowe / dwukierunkowe).
+    *   **Główne drogi krajowe i wojewódzkie (TRUNK, PRIMARY, SECONDARY, TERTIARY)** -> 50 km/h w obszarze zabudowanym; 100 km/h (dwujezdniowe) lub 90 km/h (jednojezdniowe) poza nim.
+    *   **Ulice w strefach zamieszkania (LIVING_STREET)** -> 20 km/h.
+    *   **Drogi osiedlowe i lokalne (RESIDENTIAL, UNCLASSIFIED)** -> 50 km/h.
+    *   Rozpoznawanie dróg dwujezdniowych odbywa się poprzez weryfikację kierunkowości krawędzi (`fwd != bwd` dla encodera dostępu pojazdu), natomiast obszar zabudowany jest wykrywany za pomocą heurystyki wzorców nazw oraz klasyfikacji funkcjonalnej drogi.
 *   **Trwały Cache z TTL 24h**:
     Limity pobrane z Overpass API są zapisywane w formacie JSON w pliku `speed_limits_cache.json` wraz ze znacznikiem czasu (timestamp). Przy kolejnych uruchomieniach aplikacja automatycznie odrzuca wpisy starsze niż 24 godziny, zapobiegając używaniu nieaktualnych znaków.
 *   **Bezpiecznik Postoju (Stationary Timeout)**:

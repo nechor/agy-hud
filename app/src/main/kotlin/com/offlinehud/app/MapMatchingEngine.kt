@@ -41,6 +41,7 @@ class MapMatchingEngine(private val baseDir: File) {
     private var maxSpeedEnc: DecimalEncodedValue? = null
     private var roadClassEnc: EnumEncodedValue<RoadClass>? = null
     private var carAccessEnc: com.graphhopper.routing.ev.BooleanEncodedValue? = null
+    private var onewayEnc: com.graphhopper.routing.ev.BooleanEncodedValue? = null
 
     /**
      * Initializes the GraphHopper instance if pre-compiled files exist.
@@ -77,6 +78,9 @@ class MapMatchingEngine(private val baseDir: File) {
                 }
                 if (gh.encodingManager.hasEncodedValue(VehicleAccess.key("car"))) {
                     carAccessEnc = gh.encodingManager.getBooleanEncodedValue(VehicleAccess.key("car"))
+                }
+                if (gh.encodingManager.hasEncodedValue("oneway")) {
+                    onewayEnc = gh.encodingManager.getBooleanEncodedValue("oneway")
                 }
                 isInitialized = true
                 Log.i(TAG, "GraphHopper loaded successfully from storage!")
@@ -120,6 +124,9 @@ class MapMatchingEngine(private val baseDir: File) {
                 }
                 if (gh.encodingManager.hasEncodedValue(VehicleAccess.key("car"))) {
                     carAccessEnc = gh.encodingManager.getBooleanEncodedValue(VehicleAccess.key("car"))
+                }
+                if (gh.encodingManager.hasEncodedValue("oneway")) {
+                    onewayEnc = gh.encodingManager.getBooleanEncodedValue("oneway")
                 }
                 isInitialized = true
                 Log.i(TAG, "GraphHopper compiled OSM XML data successfully!")
@@ -178,12 +185,40 @@ class MapMatchingEngine(private val baseDir: File) {
                 if (rEnc != null) {
                     val rClass = edge.get(rEnc)
                     if (rClass != null) {
+                        val isUrbanResult = isLikelyUrbanRoad(roadName) || 
+                                           rClass == RoadClass.RESIDENTIAL || 
+                                           rClass == RoadClass.LIVING_STREET ||
+                                           rClass == RoadClass.UNCLASSIFIED
+                        
+                        val isOneway = if (accessEnc != null) {
+                            val fwd = edge.get(accessEnc)
+                            val bwd = edge.getReverse(accessEnc)
+                            fwd != bwd
+                        } else {
+                            onewayEnc?.let { edge.get(it) } ?: false
+                        }
+                        
                         val (fallback, status) = when (rClass) {
                             RoadClass.MOTORWAY -> 140.0 to 6
-                            RoadClass.TRUNK -> 120.0 to 6
-                            RoadClass.PRIMARY -> (if (isLikelyUrbanRoad(roadName)) 50.0 else 90.0) to 6
-                            RoadClass.SECONDARY -> (if (isLikelyUrbanRoad(roadName)) 50.0 else 90.0) to 6
-                            RoadClass.TERTIARY -> (if (isLikelyUrbanRoad(roadName)) 50.0 else 90.0) to 6
+                            RoadClass.TRUNK -> {
+                                val isExpressway = roadName.matches(Regex("^[sS]\\s*-?\\d+.*"))
+                                if (isExpressway) {
+                                    if (isOneway) 120.0 to 6 else 100.0 to 6
+                                } else {
+                                    if (isUrbanResult) {
+                                        50.0 to 6
+                                    } else {
+                                        if (isOneway) 100.0 to 6 else 90.0 to 6
+                                    }
+                                }
+                            }
+                            RoadClass.PRIMARY, RoadClass.SECONDARY, RoadClass.TERTIARY -> {
+                                if (isUrbanResult) {
+                                    50.0 to 6
+                                } else {
+                                    if (isOneway) 100.0 to 6 else 90.0 to 6
+                                }
+                            }
                             RoadClass.RESIDENTIAL -> 50.0 to 6
                             RoadClass.LIVING_STREET -> 20.0 to 6
                             RoadClass.SERVICE -> 30.0 to 6
@@ -191,10 +226,6 @@ class MapMatchingEngine(private val baseDir: File) {
                             RoadClass.UNCLASSIFIED -> 50.0 to 6
                             else -> 50.0 to 4 // ROAD, OTHER, etc. -> default 50.0, status 4 (Purple)
                         }
-                        val isUrbanResult = isLikelyUrbanRoad(roadName) || 
-                                           rClass == RoadClass.RESIDENTIAL || 
-                                           rClass == RoadClass.LIVING_STREET ||
-                                           rClass == RoadClass.UNCLASSIFIED
                         return SpeedLimitResult(fallback, roadName, roadClassStr, status, isUrbanResult)
                     }
                 }
@@ -209,13 +240,14 @@ class MapMatchingEngine(private val baseDir: File) {
     private fun isLikelyUrbanRoad(roadName: String): Boolean {
         if (roadName.isEmpty()) return false
         val ruralPatterns = listOf(
-            "dk", "dw", "droga krajowa", "droga wojewódzka", "droga powiatowa"
+            "dk", "dw", "droga krajowa", "droga wojewódzka", "droga powiatowa", "autostrada", "droga ekspresowa"
         )
         val nameLower = roadName.lowercase().trim()
         for (pattern in ruralPatterns) {
             if (nameLower.contains(pattern)) return false
         }
         if (nameLower.matches(Regex("\\d+[a-z]?"))) return false
+        if (nameLower.matches(Regex("^[as]\\s*-?\\d+.*"))) return false
         return true
     }
 
